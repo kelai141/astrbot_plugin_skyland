@@ -391,6 +391,13 @@ class SklandSignPlugin(Star):
         async def login_handler(controller: SessionController, event: AstrMessageEvent):
             text = event.message_str.strip()
 
+            # 如果用户发送了指令（以 / 开头），提示正在登录流程中
+            if text.startswith("/"):
+                await event.send(event.plain_result(
+                    "⚠️ 你正在手机号登录流程中，无法执行其他指令。\n"
+                    '如需退出请发送"取消"，完成当前流程后再使用其他指令。'))
+                return
+
             # 取消操作（任何步骤都支持）
             if text == "取消":
                 await event.send(event.plain_result("❌ 已取消绑定"))

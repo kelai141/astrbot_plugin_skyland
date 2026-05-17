@@ -55,7 +55,7 @@ def _get_login_header() -> dict:
     return _LOGIN_HEADER_CACHE
 
 
-# 签名请求头模板（也懒加载 dId）
+# 签名请求头模板（不包含 dId，避免数美 API 不可达导致整流程断裂）
 _SIGN_HEADER_CACHE = None
 
 def _get_sign_header_template() -> dict:
@@ -65,7 +65,6 @@ def _get_sign_header_template() -> dict:
         _SIGN_HEADER_CACHE = {
             'platform': '3',
             'timestamp': '',
-            'dId': _get_login_header()['dId'],
             'vName': '1.0.0'
         }
     return _SIGN_HEADER_CACHE

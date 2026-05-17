@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import os
+import shutil
+import tempfile
 from datetime import date, datetime, timedelta
 
 from astrbot.api.event import filter, AstrMessageEvent
@@ -25,6 +27,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR = os.path.join("data", "plugins", "astrbot_plugin_skland")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_FILE = os.path.join(DATA_DIR, "users.json")
+DATA_BACKUP_FILE = os.path.join(DATA_DIR, "users.json.bak")
 
 
 @register("astrbot_plugin_skland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理")
@@ -33,11 +36,14 @@ class SklandSignPlugin(Star):
         super().__init__(context)
         self.data = self._load_data()
         self._task_started = False
+        # 如果已存在绑定用户，自动启动定时签到（应对重启/重载场景）
+        if self.data["users"]:
+            asyncio.create_task(self._start_auto_sign_loop())
 
     # ==================== 插件生命周期 ====================
 
     async def _start_auto_sign_loop(self):
-        """启动定时签到循环（插件初始化时自动调用）"""
+        """启动定时签到循环"""
         if self._task_started:
             return
         self._task_started = True
@@ -132,13 +138,38 @@ class SklandSignPlugin(Star):
     # ==================== 数据管理 ====================
 
     def _load_data(self) -> dict:
-        """加载用户数据"""
+        """加载用户数据
+
+        如果主文件损坏，自动尝试从备份恢复。
+        """
         if os.path.exists(DATA_FILE):
             try:
                 with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except (json.JSONDecodeError, Exception) as e:
-                logger.error(f"加载数据文件失败: {e}")
+                    data = json.load(f)
+                # 验证数据结构完整性
+                if "users" not in data or "stats" not in data:
+                    raise ValueError("数据结构不完整，缺少 users 或 stats 字段")
+                return data
+            except (json.JSONDecodeError, ValueError, Exception) as e:
+                logger.error(f"加载数据文件失败 ({e})，尝试从备份恢复...")
+                # 尝试从备份恢复
+                if os.path.exists(DATA_BACKUP_FILE):
+                    try:
+                        with open(DATA_BACKUP_FILE, "r", encoding="utf-8") as f:
+                            backup_data = json.load(f)
+                        if "users" in backup_data and "stats" in backup_data:
+                            logger.info("已从备份文件成功恢复数据")
+                            # 将备份写回主文件
+                            with open(DATA_FILE, "w", encoding="utf-8") as f:
+                                json.dump(backup_data, f, ensure_ascii=False, indent=2)
+                            return backup_data
+                    except Exception as be:
+                        logger.error(f"备份文件也损坏: {be}")
+                logger.error(f"数据文件恢复失败，将使用空数据")
+        return self._new_empty_data()
+
+    def _new_empty_data(self) -> dict:
+        """返回一个空的初始数据结构"""
         return {
             "users": {},
             "stats": {
@@ -148,9 +179,33 @@ class SklandSignPlugin(Star):
         }
 
     def _save_data(self):
-        """保存用户数据"""
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
+        """原子化保存用户数据
+
+        先写入临时文件再 rename，防止中途崩溃导致数据损坏。
+        同时保留一份备份，重载时报错时可从备份恢复。
+        """
+        try:
+            # 写入临时文件
+            fd, tmp_path = tempfile.mkstemp(dir=DATA_DIR, prefix="users_", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+
+            # 先备份当前文件（如果有）
+            if os.path.exists(DATA_FILE):
+                shutil.copy2(DATA_FILE, DATA_BACKUP_FILE)
+
+            # 原子替换
+            os.replace(tmp_path, DATA_FILE)
+
+        except Exception as e:
+            logger.error(f"保存数据失败: {e}")
+            # 尝试从备份恢复
+            if os.path.exists(DATA_BACKUP_FILE):
+                try:
+                    shutil.copy2(DATA_BACKUP_FILE, DATA_FILE)
+                    logger.info("已从备份文件恢复数据")
+                except Exception as restore_err:
+                    logger.error(f"从备份恢复也失败: {restore_err}")
 
     def _get_sender_id(self, event: AstrMessageEvent) -> str:
         """获取发送者的唯一标识"""

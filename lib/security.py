@@ -142,50 +142,73 @@ def get_d_id():
 
     注意：此函数发起 HTTP 同步请求到数美服务。
     由于结果会被缓存，实际只在首次调用时阻塞。
+
+    如果数美 API 不可用，会自动生成一个随机 fallback dId，
+    确保插件核心功能（签到）仍可正常工作。
     """
-    uid = str(uuid.uuid4()).encode('utf-8')
-    priId = hashlib.md5(uid).hexdigest()[0:16]
-    ep = PK.encrypt(uid, padding.PKCS1v15())
-    ep = base64.b64encode(ep).decode('utf-8')
+    import logging
+    logger = logging.getLogger(__name__)
 
-    browser = BROWSER_ENV.copy()
-    current_time = int(time.time() * 1000)
-    browser.update({
-        'vpw': str(uuid.uuid4()),
-        'svm': current_time,
-        'trees': str(uuid.uuid4()),
-        'pmf': current_time
-    })
+    last_error = None
+    for attempt in range(3):
+        try:
+            uid = str(uuid.uuid4()).encode('utf-8')
+            priId = hashlib.md5(uid).hexdigest()[0:16]
+            ep = PK.encrypt(uid, padding.PKCS1v15())
+            ep = base64.b64encode(ep).decode('utf-8')
 
-    des_target = {
-        **browser,
-        'protocol': 102,
-        'organization': SM_CONFIG['organization'],
-        'appId': SM_CONFIG['appId'],
-        'os': 'web',
-        'version': '3.0.0',
-        'sdkver': '3.0.0',
-        'box': '',
-        'rtype': 'all',
-        'smid': get_smid(),
-        'subVersion': '1.0.0',
-        'time': 0
-    }
-    des_target['tn'] = hashlib.md5(get_tn(des_target).encode()).hexdigest()
+            browser = BROWSER_ENV.copy()
+            current_time = int(time.time() * 1000)
+            browser.update({
+                'vpw': str(uuid.uuid4()),
+                'svm': current_time,
+                'trees': str(uuid.uuid4()),
+                'pmf': current_time
+            })
 
-    des_result = _AES(GZIP(_DES(des_target)), priId.encode('utf-8'))
+            des_target = {
+                **browser,
+                'protocol': 102,
+                'organization': SM_CONFIG['organization'],
+                'appId': SM_CONFIG['appId'],
+                'os': 'web',
+                'version': '3.0.0',
+                'sdkver': '3.0.0',
+                'box': '',
+                'rtype': 'all',
+                'smid': get_smid(),
+                'subVersion': '1.0.0',
+                'time': 0
+            }
+            des_target['tn'] = hashlib.md5(get_tn(des_target).encode()).hexdigest()
 
-    response = requests.post(devices_info_url, json={
-        'appId': 'default',
-        'compress': 2,
-        'data': des_result,
-        'encode': 5,
-        'ep': ep,
-        'organization': SM_CONFIG['organization'],
-        'os': 'web'
-    })
+            des_result = _AES(GZIP(_DES(des_target)), priId.encode('utf-8'))
 
-    resp = response.json()
-    if resp['code'] != 1100:
-        raise Exception("dId 计算失败，请联系作者")
-    return 'B' + resp['detail']['deviceId']
+            response = requests.post(devices_info_url, json={
+                'appId': 'default',
+                'compress': 2,
+                'data': des_result,
+                'encode': 5,
+                'ep': ep,
+                'organization': SM_CONFIG['organization'],
+                'os': 'web'
+            }, timeout=10)
+
+            resp = response.json()
+            if resp['code'] != 1100:
+                raise Exception(f"数美API返回异常: {resp.get('code', 'unknown')}")
+
+            return 'B' + resp['detail']['deviceId']
+
+        except Exception as e:
+            last_error = e
+            logger.warning(f"dId 生成第 {attempt + 1} 次尝试失败: {e}")
+            if attempt < 2:
+                import time as _time
+                _time.sleep(1)
+
+    # 所有重试失败，生成 fallback dId
+    fallback = 'B' + hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()
+    logger.warning(f"数美API均不可用，使用 fallback dId: {fallback}")
+    logger.warning("签到功能仍可正常工作，但部分平台可能要求真实 dId")
+    return fallback

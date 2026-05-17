@@ -61,8 +61,16 @@ class SklandSignPlugin(Star):
         """
         AstrBot 官方生命周期钩子。
         插件实例化 + 事件绑定完成后自动调用。
-        在此处启动定时签到（而不是在 __init__ 中）。
+        在此处启动定时签到 + 预生成 dId（避免首次用时阻塞）。
         """
+        # 预生成设备指纹 dId，将同步阻塞移到加载阶段而非用户操作时
+        try:
+            from .lib.skyland import _get_login_header
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _get_login_header)
+        except Exception as e:
+            logger.warning(f"预生成 dId 失败（不影响签到，将在需要时重试）: {e}")
+
         if self.data["users"] and not self._task_started:
             self._start_auto_sign_loop()
 
@@ -382,8 +390,10 @@ class SklandSignPlugin(Star):
                     controller.stop()
                     return
 
-                if not phone.isdigit() or len(phone) < 8:
-                    await event.send(event.plain_result("⚠️ 手机号格式不正确，请重新输入："))
+                # 去除手机号中可能携带的空格、横线等
+                phone = phone.replace(" ", "").replace("-", "").replace("+86", "")
+                if not phone.isdigit() or len(phone) != 11:
+                    await event.send(event.plain_result("⚠️ 手机号格式不正确，请输入11位手机号，如 13800138000："))
                     return
 
                 # 发送验证码
@@ -397,7 +407,15 @@ class SklandSignPlugin(Star):
                             controller.stop()
                             return
                 except Exception as e:
-                    await event.send(event.plain_result(f"❌ 发送验证码出错: {e}"))
+                    err_text = str(e)
+                    # 如果是 dId 失败，给更友好的提示
+                    if "dId" in err_text or "数美" in err_text:
+                        await event.send(event.plain_result(
+                            "⚠️ 设备指纹生成失败（网络环境问题），请稍后重试。\n"
+                            "或者改用 /skland bind <token> 方式绑定。"
+                        ))
+                    else:
+                        await event.send(event.plain_result(f"❌ 发送验证码出错: {err_text}"))
                     controller.stop()
                     return
 

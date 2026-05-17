@@ -9,6 +9,8 @@ import json
 import time
 import uuid
 
+import requests
+
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
@@ -96,7 +98,6 @@ def _AES(v: bytes, k: bytes):
     iv = '0102030405060708'
     key = AES(k)
     c = Cipher(key, CBC(iv.encode('utf-8')))
-    c.encryptor()
     v += b'\x00'
     while len(v) % 16 != 0:
         v += b'\x00'
@@ -140,11 +141,8 @@ def get_d_id():
     """获取设备指纹 dId
 
     注意：此函数发起 HTTP 同步请求到数美服务。
-    在异步环境中使用时，由于只在 token 绑定和签到时调用一次，
-    对性能影响极小，因此保持同步实现。
+    由于结果会被缓存，实际只在首次调用时阻塞。
     """
-    import requests
-
     uid = str(uuid.uuid4()).encode('utf-8')
     priId = hashlib.md5(uid).hexdigest()[0:16]
     ep = PK.encrypt(uid, padding.PKCS1v15())

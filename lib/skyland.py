@@ -36,23 +36,39 @@ HEADER = {
     'X-Requested-With': 'com.hypergryph.skland'
 }
 
-HEADER_LOGIN = {
-    'User-Agent': ('Mozilla/5.0 (Linux; Android 12; SM-A5560 Build/V417IR; wv) '
-                   'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/101.0.4951.61 Safari/537.36; '
-                   'SKLand/1.52.1'),
-    'Accept-Encoding': 'gzip',
-    'Connection': 'close',
-    'dId': get_d_id(),
-    'X-Requested-With': 'com.hypergryph.skland'
-}
+# 登录用请求头（dId 懒加载，避免模块导入时调用同步网络请求）
+_LOGIN_HEADER_CACHE = None
 
-# 签名请求头模板（顺序固定）
-HEADER_FOR_SIGN = {
-    'platform': '3',
-    'timestamp': '',
-    'dId': HEADER_LOGIN['dId'],
-    'vName': '1.0.0'
-}
+def _get_login_header() -> dict:
+    """懒加载并缓存登录请求头（含 dId）"""
+    global _LOGIN_HEADER_CACHE
+    if _LOGIN_HEADER_CACHE is None:
+        _LOGIN_HEADER_CACHE = {
+            'User-Agent': ('Mozilla/5.0 (Linux; Android 12; SM-A5560 Build/V417IR; wv) '
+                           'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/101.0.4951.61 Safari/537.36; '
+                           'SKLand/1.52.1'),
+            'Accept-Encoding': 'gzip',
+            'Connection': 'close',
+            'dId': get_d_id(),
+            'X-Requested-With': 'com.hypergryph.skland'
+        }
+    return _LOGIN_HEADER_CACHE
+
+
+# 签名请求头模板（也懒加载 dId）
+_SIGN_HEADER_CACHE = None
+
+def _get_sign_header_template() -> dict:
+    """懒加载并缓存签名请求头模板"""
+    global _SIGN_HEADER_CACHE
+    if _SIGN_HEADER_CACHE is None:
+        _SIGN_HEADER_CACHE = {
+            'platform': '3',
+            'timestamp': '',
+            'dId': _get_login_header()['dId'],
+            'vName': '1.0.0'
+        }
+    return _SIGN_HEADER_CACHE
 
 # API 地址
 SIGN_URL_MAPPING = {
@@ -75,7 +91,7 @@ def generate_signature(path: str, body_or_query: str, token: str):
     算法：HMAC-SHA256(路径 + 请求体/查询 + 时间戳 + 请求头关键参数) → MD5
     """
     t = str(int(time.time()) - 2)
-    header_ca = json.loads(json.dumps(HEADER_FOR_SIGN))
+    header_ca = dict(_get_sign_header_template())
     header_ca['timestamp'] = t
     header_ca_str = json.dumps(header_ca, separators=(',', ':'))
     s = path + body_or_query + t + header_ca_str
@@ -130,7 +146,7 @@ async def get_grant_code(session: aiohttp.ClientSession, token: str) -> str:
         'appCode': APP_CODE,
         'token': token,
         'type': 0
-    }, headers=HEADER_LOGIN)
+    }, headers=_get_login_header())
     if resp.get('status') != 0:
         raise Exception(f'获取认证代码失败: {resp.get("msg", resp)}')
     return resp['data']['code']
@@ -141,7 +157,7 @@ async def get_cred(session: aiohttp.ClientSession, grant: str) -> dict:
     resp = await api_post(session, CRED_CODE_URL, json_data={
         'code': grant,
         'kind': 1
-    }, headers=HEADER_LOGIN)
+    }, headers=_get_login_header())
     if resp.get('code') != 0:
         raise Exception(f'获取 cred 失败: {resp.get("message", resp)}')
     return resp['data']

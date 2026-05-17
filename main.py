@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
+
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star, register
@@ -143,21 +145,13 @@ class SklandSignPlugin(Star):
 
     async def _sign_for_user(self, sender_id: str, info: dict) -> list:
         """为单个用户执行签到"""
-        import aiohttp
         token = info.get("token", "")
         cred_cred = info.get("cred_cred", "")
+        cred_token = info.get("cred_token", "")
 
-        async with aiohttp.ClientSession() as session:
-            # 如果 cred 为空，重新获取
-            if not cred_cred:
-                cred_resp = await get_cred_by_token(session, token)
-                cred_cred = cred_resp.get("cred", "")
-                info["cred_cred"] = cred_cred
-                info["cred_token"] = cred_resp.get("token", "")
-                self._save_data()
-
-            cred_token = info.get("cred_token", "")
-            if not cred_token:
+        # 如果 cred 或 token 不完整，重新获取凭证对
+        if not cred_cred or not cred_token:
+            async with aiohttp.ClientSession() as session:
                 cred_resp = await get_cred_by_token(session, token)
                 cred_cred = cred_resp.get("cred", "")
                 cred_token = cred_resp.get("token", "")
@@ -165,6 +159,7 @@ class SklandSignPlugin(Star):
                 info["cred_token"] = cred_token
                 self._save_data()
 
+        async with aiohttp.ClientSession() as session:
             return await do_sign(session, token, cred_cred)
 
     async def _notify_user(self, info: dict, message: str):
@@ -352,11 +347,11 @@ class SklandSignPlugin(Star):
     @filter.command("skland login")
     async def login(self, event: AstrMessageEvent):
         """通过手机号+验证码登录绑定"""
-        from .lib.skyland import api_post, LOGIN_CODE_URL, TOKEN_PHONE_CODE_URL, HEADER_LOGIN
+        from .lib.skyland import api_post, LOGIN_CODE_URL, TOKEN_PHONE_CODE_URL, _get_login_header
         from astrbot.core.utils.session_waiter import session_waiter, SessionController
 
         try:
-            yield event.plain_result("📱 请输入你的手机号（发送"取消"可取消操作）：")
+            yield event.plain_result('📱 请输入你的手机号（发送"取消"可取消操作）：')
 
             @session_waiter(timeout=120)
             async def wait_phone(controller: SessionController, event: AstrMessageEvent):
@@ -376,7 +371,7 @@ class SklandSignPlugin(Star):
                     async with aiohttp.ClientSession() as session:
                         resp = await api_post(session, LOGIN_CODE_URL,
                                               json_data={'phone': phone, 'type': 2},
-                                              headers=HEADER_LOGIN)
+                                              headers=_get_login_header())
                         if resp.get("status") != 0:
                             await event.send(event.plain_result(f"❌ 发送验证码失败: {resp.get('msg', '未知错误')}"))
                             controller.stop()
@@ -386,7 +381,7 @@ class SklandSignPlugin(Star):
                     controller.stop()
                     return
 
-                await event.send(event.plain_result("📱 验证码已发送，请输入6位验证码（发送"取消"可取消）："))
+                await event.send(event.plain_result('📱 验证码已发送，请输入6位验证码（发送"取消"可取消）：'))
 
                 @session_waiter(timeout=120)
                 async def wait_code(controller: SessionController, event: AstrMessageEvent):
@@ -402,11 +397,11 @@ class SklandSignPlugin(Star):
                         async with aiohttp.ClientSession() as session:
                             r = await api_post(session, TOKEN_PHONE_CODE_URL,
                                                json_data={"phone": phone, "code": code},
-                                               headers=HEADER_LOGIN)
+                                               headers=_get_login_header())
                             if r.get("status") != 0:
                                 await event.send(
-                                    event.plain_result(f"❌ 登录失败: {r.get('msg', '请检查验证码是否正确')}\n"
-                                                       f"输入"继续"重新尝试，其他内容取消"))
+                                    event.plain_result(f'❌ 登录失败: {r.get("msg", "请检查验证码是否正确")}\n'
+                                                       f'输入"继续"重新尝试，其他内容取消'))
                                 # 这里可以允许重试，但简化处理：结束会话
                                 controller.stop()
                                 return

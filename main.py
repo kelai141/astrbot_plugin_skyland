@@ -44,7 +44,7 @@ _OLD_DATA_BASE = Path(str(_DATA_BASE).replace("astrbot_plugin_skyland", "astrbot
 _OLD_DATA_FILE = str(_OLD_DATA_BASE / "users.json")
 
 
-@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.3.0")
+@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.3.2")
 class SklandSignPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -353,7 +353,10 @@ class SklandSignPlugin(Star):
 
     @skland.command("bind")
     async def bind(self, event: AstrMessageEvent, token: str = None):
-        """绑定鹰角通行证 token"""
+        """绑定鹰角通行证 token（仅限私聊）"""
+        if event.get_group_id():
+            yield event.plain_result("🔒 请在私聊中使用此命令（token 不应暴露在群聊中）\n发送 /skland bind <token> 到机器人私聊即可。")
+            return
         if not token:
             yield event.plain_result(
                 "⚠️ 请提供 token。\n\n"
@@ -405,7 +408,10 @@ class SklandSignPlugin(Star):
 
     @skland.command("login")
     async def login(self, event: AstrMessageEvent):
-        """通过手机号+验证码登录绑定"""
+        """通过手机号+验证码登录绑定（仅限私聊）"""
+        if event.get_group_id():
+            yield event.plain_result("🔒 请在私聊中使用此命令（验证码不应暴露在群聊中）\n发送 /skland login 到机器人私聊即可。")
+            return
         from .lib.skyland import api_post, LOGIN_CODE_URL, TOKEN_PHONE_CODE_URL, _get_login_header
         from astrbot.core.utils.session_waiter import session_waiter, SessionController
 
@@ -575,7 +581,10 @@ class SklandSignPlugin(Star):
 
     @skland.command("unbind")
     async def unbind(self, event: AstrMessageEvent):
-        """解绑账号（需要确认）"""
+        """解绑账号（仅限私聊，需要确认）"""
+        if event.get_group_id():
+            yield event.plain_result("🔒 请在私聊中使用此命令\n发送 /skland unbind 到机器人私聊即可。")
+            return
         sid = self._get_sender_id(event)
 
         if sid not in self.data["users"]:

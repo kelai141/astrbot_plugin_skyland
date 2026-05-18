@@ -18,18 +18,18 @@
 
 ## 📋 指令列表
 
-| 指令 | 说明 | 权限 |
-|------|------|:----:|
-| `/skland help` | 显示帮助信息 | 所有人 |
-| `/skland bind <token>` | 绑定鹰角通行证 token | 所有人 |
-| `/skland login` | 通过手机号+验证码登录绑定 | 所有人 |
-| `/skland sign` | 立即手动签到 | 所有人 |
-| `/skland status` | 查看我的签到状态 | 所有人 |
-| `/skland unbind` | 解绑账号 | 所有人 |
-| `/skland did` | 查看设备指纹状态 | 所有人 |
-| `/skland list` | 查看所有已绑定用户 | 管理员 |
-| `/skland remove <id>` | 移除指定用户的绑定 | 管理员 |
-| `/skland broadcast <msg>` | 向所有用户群发消息 | 管理员 |
+| 指令 | 说明 | 场景 | 管理员 |
+|------|------|:----:|:-----:|
+| `/skland help` | 显示帮助信息 | 群聊/私聊 | — |
+| `/skland bind <token>` | 绑定鹰角通行证 token | 🔒 仅私聊 | — |
+| `/skland login` | 通过手机号+验证码登录绑定 | 🔒 仅私聊 | — |
+| `/skland sign` | 立即手动签到 | 群聊/私聊 | — |
+| `/skland status` | 查看我的签到状态 | 群聊/私聊 | — |
+| `/skland unbind` | 解绑账号 | 🔒 仅私聊 | — |
+| `/skland did` | 查看设备指纹状态 | 群聊/私聊 | — |
+| `/skland list` | 查看所有已绑定用户 | 群聊/私聊 | 🔒 |
+| `/skland remove <id>` | 移除指定用户的绑定 | 群聊/私聊 | 🔒 |
+| `/skland broadcast <msg>` | 向所有用户群发消息 | 群聊/私聊 | 🔒 |
 
 ## 🔧 安装
 

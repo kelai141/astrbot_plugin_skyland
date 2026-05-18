@@ -93,16 +93,18 @@ def generate_signature(path: str, body_or_query: str, token: str):
     生成签名头
 
     算法：HMAC-SHA256(路径 + 请求体/查询 + 时间戳 + 请求头关键参数) → MD5
-    严格对齐原始 skyland-auto-sign 的签名计算方式
+    逐行对齐原始 skyland-auto-sign：
+    - 时间戳 -2（补偿服务器时钟偏差）
+    - header_ca 通过 json.loads(json.dumps(...)) 深度重建
+    - compact JSON: separators=(',', ':')
     """
-    t = int(time.time())
-    header_ca = dict(_get_sign_header_template())
-    header_ca['timestamp'] = str(t)
-    header_ca_str = json.dumps(header_ca)
-    s = path + body_or_query + str(t) + header_ca_str
-    hex_s = hmac.new(
-        token.encode('utf-8'), s.encode('utf-8'), hashlib.sha256
-    ).hexdigest()
+    t = str(int(time.time()) - 2)
+    signing_key = token.encode('utf-8')
+    header_ca = json.loads(json.dumps(_get_sign_header_template()))
+    header_ca['timestamp'] = t
+    header_ca_str = json.dumps(header_ca, separators=(',', ':'))
+    s = path + body_or_query + t + header_ca_str
+    hex_s = hmac.new(signing_key, s.encode('utf-8'), hashlib.sha256).hexdigest()
     md5 = hashlib.md5(hex_s.encode('utf-8')).hexdigest()
     # 🔍 诊断：输出签名输入（path 及 header_ca_json），用于排查验签失败
     logger.warning(f"[签名] path={path} | t={t} | header_ca={header_ca_str} → sign={md5[:12]}…")

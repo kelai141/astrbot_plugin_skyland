@@ -44,7 +44,7 @@ _OLD_DATA_BASE = Path(str(_DATA_BASE).replace("astrbot_plugin_skyland", "astrbot
 _OLD_DATA_FILE = str(_OLD_DATA_BASE / "users.json")
 
 
-@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.3.2")
+@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.3.3")
 class SklandSignPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -537,7 +537,6 @@ class SklandSignPlugin(Star):
             msg_lines = [
                 "🌠 森空岛签到完成",
                 f"📅 {today}",
-                "─" * 20,
             ]
             msg_lines.extend(result_logs) if result_logs else msg_lines.append("今日无可用签到项目")
             yield event.plain_result("\n".join(msg_lines))
@@ -567,14 +566,10 @@ class SklandSignPlugin(Star):
 
         yield event.plain_result(
             f"📊 森空岛签到状态\n"
-            f"─" * 20 + "\n"
             f"🆔 绑定角色: {info.get('game_info', '未知')}\n"
             f"📅 绑定时间: {info.get('bound_at', '未知')}\n"
             f"✅ 今日已签到: {'是 🎉' if is_signed_today else '否'}\n"
-            f"📋 上次结果: {result}\n"
-            f"─" * 20 + "\n"
-            f"/skland sign - 手动签到\n"
-            f"/skland unbind - 解绑账号"
+            f"📋 上次结果: {result}"
         )
 
     # ==================== 指令: 解绑 ====================

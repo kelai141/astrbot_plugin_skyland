@@ -91,12 +91,13 @@ def generate_signature(path: str, body_or_query: str, token: str):
     生成签名头
 
     算法：HMAC-SHA256(路径 + 请求体/查询 + 时间戳 + 请求头关键参数) → MD5
+    严格对齐原始 skyland-auto-sign 的签名计算方式
     """
-    t = str(int(time.time()) - 2)
+    t = int(time.time())
     header_ca = dict(_get_sign_header_template())
-    header_ca['timestamp'] = t
-    header_ca_str = json.dumps(header_ca, separators=(',', ':'))
-    s = path + body_or_query + t + header_ca_str
+    header_ca['timestamp'] = str(t)
+    header_ca_str = json.dumps(header_ca)
+    s = path + body_or_query + str(t) + header_ca_str
     hex_s = hmac.new(
         token.encode('utf-8'), s.encode('utf-8'), hashlib.sha256
     ).hexdigest()

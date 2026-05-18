@@ -64,12 +64,14 @@ def _get_sign_header_template() -> dict:
     """懒加载并缓存签名请求头模板（含 dId）"""
     global _SIGN_HEADER_CACHE
     if _SIGN_HEADER_CACHE is None:
+        did = get_d_id()
         _SIGN_HEADER_CACHE = {
             'platform': '3',
             'timestamp': '',
-            'dId': get_d_id(),
+            'dId': did,
             'vName': '1.0.0'
         }
+        logger.warning(f"[签名模板] 初始化: dId={did[:20]}… platform=3 vName=1.0.0")
     return _SIGN_HEADER_CACHE
 
 # API 地址
@@ -102,7 +104,8 @@ def generate_signature(path: str, body_or_query: str, token: str):
         token.encode('utf-8'), s.encode('utf-8'), hashlib.sha256
     ).hexdigest()
     md5 = hashlib.md5(hex_s.encode('utf-8')).hexdigest()
-    logger.debug(f'生成签名: {md5}')
+    # 🔍 诊断：输出签名输入（path 及 header_ca_json），用于排查验签失败
+    logger.warning(f"[签名] path={path} | t={t} | header_ca={header_ca_str} → sign={md5[:12]}…")
     return md5, header_ca
 
 
@@ -235,6 +238,10 @@ async def get_binding_list(session: aiohttp.ClientSession, token: str, cred: str
     headers = HEADER.copy()
     headers['cred'] = cred
     headers = get_sign_header(BINDING_URL, 'get', None, headers, token)
+
+    # 🔍 诊断日志：dump 完整请求头（脱敏），用于排查 401
+    _debug_headers = {k: (v[:20] + '…' if k in ('cred', 'dId', 'sign') and len(str(v)) > 20 else v) for k, v in headers.items()}
+    logger.warning(f"[角色] 实际发送请求头: {json.dumps(_debug_headers, ensure_ascii=False)}")
 
     resp = await api_get(session, BINDING_URL, headers=headers)
     code = resp.get('code')

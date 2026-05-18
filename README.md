@@ -89,10 +89,14 @@ astrbot_plugin_skyland/
 - 各用户之间签到间隔 2 秒，防止 API 限流
 - 首次使用会自动获取 dId（设备指纹），该值会缓存
 
-## 🙏 致谢
+## 📄 开源许可
 
-- 签到核心逻辑移植自 [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign)
-- [AstrBot](https://github.com/AstrBotDevs/AstrBot) 插件框架
+本项目基于 [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign) (Copyright © 2023 xxyz30) 二次开发，沿用 MIT 许可证。
+
+- 原始签到核心逻辑（`lib/skyland.py`、`lib/security.py`）移植自上述项目
+- AstrBot 插件适配及后续修改版权归属 kelai141
+
+详见 [LICENSE](./LICENSE)。
 
 ## 📝 变更日志
 

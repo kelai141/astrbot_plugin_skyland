@@ -126,8 +126,7 @@ class SklandSignPlugin(Star):
                     except (ValueError, AttributeError):
                         uh, um = 9, 5
                     if uh == current_h and um == current_m:
-                        if info.get("last_sign_date") != today or not info.get("last_sign_result", "").startswith("✅"):
-                            due_users.append((sid, info))
+                        due_users.append((sid, info))
 
                 if due_users:
                     logger.info(f"[{current_h:02d}:{current_m:02d}] 触发签到，{len(due_users)} 个用户")
@@ -153,8 +152,8 @@ class SklandSignPlugin(Star):
                     info["last_sign_date"] = today
                     info["last_sign_result"] = "✅ " + " | ".join(result) if result else "✅ 签到完成（无奖励）"
                     saved = True
-                    await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n" + "\n".join(result))
-                    logger.info(f"用户 {sender_id} 签到成功")
+                    await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n" + "\n".join(result) if result else "🌠 森空岛自动签到\n📅 {today}\n✅ 今日已签到 🎉")
+                    logger.info(f"用户 {sender_id} 签到结果: {'成功' if result else '已签'}")
                 except Exception as e:
                     err_msg = f"❌ 签到失败: {e}"
                     # 失败不更新 last_sign_date，下一分钟重试

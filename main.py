@@ -44,7 +44,7 @@ _OLD_DATA_BASE = Path(str(_DATA_BASE).replace("astrbot_plugin_skyland", "astrbot
 _OLD_DATA_FILE = str(_OLD_DATA_BASE / "users.json")
 
 
-@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.3.3")
+@register("astrbot_plugin_skyland", "森空岛签到", "森空岛（明日方舟/终末地）自动签到，纯聊天交互，多用户管理", "v1.4.0")
 class SklandSignPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -111,8 +111,15 @@ class SklandSignPlugin(Star):
         try:
             while True:
                 now = datetime.now()
-                # 计算下一次签到时间：每天 09:05（给一点余量）
-                target = now.replace(hour=9, minute=5, second=0, microsecond=0)
+                # 从配置读取签到时间，默认 09:05
+                sign_time_str = self.data["stats"].get("sign_time", "09:05")
+                try:
+                    h, m = map(int, sign_time_str.split(":"))
+                except (ValueError, AttributeError):
+                    h, m = 9, 5
+                    self.data["stats"]["sign_time"] = "09:05"
+
+                target = now.replace(hour=h, minute=m, second=0, microsecond=0)
                 if target <= now:
                     target += timedelta(days=1)
                 wait_seconds = (target - now).total_seconds()
@@ -124,7 +131,7 @@ class SklandSignPlugin(Star):
             raise  # 必须重新抛出，让 asyncio 知道任务已被取消
 
     async def _auto_sign_all(self):
-        """为所有已绑定用户自动签到"""
+        """为所有已绑定用户自动签到（批量处理，连接复用，原子保存）"""
         today = date.today().isoformat()
         users = list(self.data["users"].items())
         if not users:
@@ -132,32 +139,57 @@ class SklandSignPlugin(Star):
             return
 
         logger.info(f"开始自动签到，共 {len(users)} 个用户")
-        for sender_id, info in users:
-            if info.get("last_sign_date") == today and info.get("last_sign_result", "").startswith("✅"):
-                logger.info(f"用户 {sender_id} 今日已签到，跳过")
-                continue
+        saved = False
 
-            try:
-                result = await self._sign_for_user(sender_id, info)
-                info["last_sign_date"] = today
-                info["last_sign_result"] = "✅ " + " | ".join(result) if result else "✅ 签到完成（无奖励）"
+        # 共享 aiohttp 会话（连接池复用，减少 TCP 握手）
+        connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            for sender_id, info in users:
+                if info.get("last_sign_date") == today and info.get("last_sign_result", "").startswith("✅"):
+                    logger.info(f"用户 {sender_id} 今日已签到，跳过")
+                    continue
 
-                # 推送结果给用户
-                await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n" + "\n".join(result))
-                logger.info(f"用户 {sender_id} 签到成功")
-            except Exception as e:
-                err_msg = f"❌ 签到失败: {e}"
-                info["last_sign_date"] = today
-                info["last_sign_result"] = err_msg
-                await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n{err_msg}")
-                logger.error(f"用户 {sender_id} 签到失败: {e}", exc_info=e)
+                try:
+                    result = await self._sign_for_user_with_session(session, sender_id, info)
+                    info["last_sign_date"] = today
+                    info["last_sign_result"] = "✅ " + " | ".join(result) if result else "✅ 签到完成（无奖励）"
+                    saved = True
 
+                    # 推送结果（push_enabled 检查在 _notify_user 内部）
+                    await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n" + "\n".join(result))
+                    logger.info(f"用户 {sender_id} 签到成功")
+                except Exception as e:
+                    err_msg = f"❌ 签到失败: {e}"
+                    info["last_sign_date"] = today
+                    info["last_sign_result"] = err_msg
+                    saved = True
+                    await self._notify_user(info, f"🌠 森空岛自动签到\n📅 {today}\n{err_msg}")
+                    logger.error(f"用户 {sender_id} 签到失败: {e}", exc_info=e)
+
+                # 每个用户间隔 3-5s 随机延迟，防限流/风控
+                await asyncio.sleep(3 + (hash(sender_id) % 3))
+
+        # 批量结束后统一保存（仅一次磁盘写入）
+        if saved:
+            self.data["stats"]["last_auto_sign"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._save_data()
-            await asyncio.sleep(2)  # 每个用户间隔 2s，防限流
-
-        self.data["stats"]["last_auto_sign"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._save_data()
         logger.info("自动签到完成")
+
+    async def _sign_for_user_with_session(self, session: aiohttp.ClientSession,
+                                            sender_id: str, info: dict) -> list:
+        """为单个用户执行签到（复用外部 session）"""
+        token = info.get("token", "")
+        cred_cred = info.get("cred_cred", "")
+        cred_token = info.get("cred_token", "")
+
+        if not cred_cred or not cred_token:
+            cred_resp = await get_cred_by_token(session, token)
+            cred_cred = cred_resp.get("cred", "")
+            cred_token = cred_resp.get("token", "")
+            info["cred_cred"] = cred_cred
+            info["cred_token"] = cred_token
+
+        return await do_sign(session, cred_token, cred_cred)
 
     async def _sign_for_user(self, sender_id: str, info: dict) -> list:
         """为单个用户执行签到"""
@@ -179,13 +211,15 @@ class SklandSignPlugin(Star):
             return await do_sign(session, cred_token, cred_cred)
 
     async def _notify_user(self, info: dict, message: str):
-        """向用户推送消息（仅限私聊绑定的用户）
+        """向用户推送消息（需私聊绑定 + push 开关开启）
 
         使用 AstrBot 官方推荐的 MessageChain 构建主动消息。
-        群聊绑定的用户（或旧数据 missing bound_in_private）跳过推送。
         """
         if not info.get("bound_in_private"):
             logger.info(f"用户 {info.get('sender_id')} 非私聊绑定，跳过主动推送")
+            return
+        if not info.get("push_enabled", True):  # 旧数据默认开启
+            logger.info(f"用户 {info.get('sender_id')} 已关闭推送，跳过")
             return
 
         target = info.get("notify_target")
@@ -193,7 +227,7 @@ class SklandSignPlugin(Star):
             logger.warning(f"用户 {info.get('sender_id')} 没有通知目标，跳过推送")
             return
         try:
-            chain = MessageChain().message(message)
+            chain = MessageChain().message(message + "\n\n💡 发送 /skland push off 关闭自动推送")
             await self.context.send_message(target, chain)
         except Exception as e:
             logger.error(f"推送消息失败: {e}")
@@ -247,6 +281,7 @@ class SklandSignPlugin(Star):
             "stats": {
                 "total_bindings": 0,
                 "last_auto_sign": None,
+                "sign_time": "09:05",  # 默认早上 9:05
             }
         }
 
@@ -300,7 +335,8 @@ class SklandSignPlugin(Star):
             "last_sign_result": None,
             "game_info": game_info,
             "notify_target": sid,
-            "bound_in_private": not bool(event.get_group_id()),  # 群聊绑定的旧数据不推送
+            "bound_in_private": not bool(event.get_group_id()),
+            "push_enabled": True,  # 初始默认开启
         }
 
     # ==================== 指令系统（command_group 模式） ====================
@@ -553,6 +589,63 @@ class SklandSignPlugin(Star):
             self._save_data()
             yield event.plain_result(err_msg)
             logger.error(f"用户 {sid} 手动签到失败: {e}", exc_info=e)
+
+    # ==================== 指令: 推送开关 ====================
+
+    @skland.command("push")
+    async def push_toggle(self, event: AstrMessageEvent, action: str = None):
+        """开关自动签到推送通知"""
+        sid = self._get_sender_id(event)
+
+        if sid not in self.data["users"]:
+            yield event.plain_result("❌ 你还没有绑定账号！")
+            return
+
+        if not action or action not in ("on", "off"):
+            enabled = self.data["users"][sid].get("push_enabled", True)
+            yield event.plain_result(f"📢 自动推送: {'🟢 已开启' if enabled else '🔴 已关闭'}\n修改: /skland push on 或 /skland push off")
+            return
+
+        self.data["users"][sid]["push_enabled"] = (action == "on")
+        self._save_data()
+        yield event.plain_result(f"📢 自动推送已{'开启' if action == 'on' else '关闭'}" +
+                                 ("\n签到完成后会私聊通知你。" if action == "on" else "\n不会再主动推送签到结果。"))
+
+    # ==================== 指令: 签到时间设置 ====================
+
+    @skland.command("time")
+    async def time_config(self, event: AstrMessageEvent, action: str = None, arg: str = None):
+        """查看或设置自动签到时间（仅管理员）"""
+        if not self._is_admin(event):
+            yield event.plain_result("❌ 仅管理员可设置签到时间")
+            return
+
+        if action == "set" and arg:
+            # 验证时间格式
+            try:
+                parts = arg.split(":")
+                h, m = int(parts[0]), int(parts[1])
+                if not (0 <= h <= 23 and 0 <= m <= 59):
+                    raise ValueError
+            except (ValueError, IndexError):
+                yield event.plain_result("❌ 时间格式错误，请使用 HH:MM 格式\n例如: /skland time set 09:05")
+                return
+
+            old_time = self.data["stats"].get("sign_time", "09:05")
+            self.data["stats"]["sign_time"] = arg
+            self._save_data()
+            yield event.plain_result(f"⏰ 签到时间已更新: {old_time} → {arg}\n\n⚠️ 需要热重载插件才能生效。")
+            logger.info(f"签到时间变更: {old_time} → {arg}")
+
+        else:
+            sign_time = self.data["stats"].get("sign_time", "09:05")
+            yield event.plain_result(
+                f"⏰ 当前自动签到时间: {sign_time}\n\n"
+                f"修改: /skland time set HH:MM\n"
+                f"例如: /skland time set 06:30（早上六点半）\n"
+                f"      /skland time set 22:30（晚上十点半）\n\n"
+                f"⚠️ 修改后需热重载插件生效。"
+            )
 
     # ==================== 指令: 查看状态 ====================
 

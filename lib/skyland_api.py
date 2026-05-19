@@ -402,16 +402,34 @@ class SkylandApiClient:
             (status, message)
             status: 'signed' | 'already' | 'failed'
         """
-        body = {'gameId': char_data.get('gameId'), 'uid': char_data.get('uid')}
+        game_id = char_data.get('gameId')
+        uid = char_data.get('uid')
+        game_name = char_data.get('gameName', '明日方舟')
+        channel = char_data.get('channelName', '')
+        nickname = char_data.get('nickName', char_data.get('nickname', ''))
+
+        # 参数校验：缺少必填字段时直接返回错误，不发无效请求
+        if game_id is None or uid is None:
+            missing = []
+            if game_id is None:
+                missing.append('gameId')
+            if uid is None:
+                missing.append('uid')
+            logger.warning(
+                f"[签到] 跳过 {game_name}: 缺少必填字段 {missing}，"
+                f"角色原始数据: {json.dumps(char_data, ensure_ascii=False)[:200]}"
+            )
+            return ('failed',
+                    f'❌ [{game_name}] {nickname}({channel}) 签到失败: '
+                    f'角色数据不完整（缺少 {"、".join(missing)}），请尝试重新绑定')
+
+        body = {'gameId': game_id, 'uid': uid}
         url = SIGN_URL_MAPPING['arknights']
         headers = _BASE_HEADERS.copy()
         headers['cred'] = cred
         apply_signature(url, 'POST', body, headers, signing_token)
 
         resp = await self.post(url, json_data=body, headers=headers)
-        game_name = char_data.get('gameName', '明日方舟')
-        channel = char_data.get('channelName', '')
-        nickname = char_data.get('nickName', '')
 
         code = resp.data.get('code')
         if code == 0:

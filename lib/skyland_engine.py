@@ -218,6 +218,7 @@ class SkylandSignEngine:
                 signed_games=signed,
                 already_signed_games=already,
                 failed_games=failed,
+                error=(messages[0] if failed else None),
             )
 
         except SkylandAuthError as e:
@@ -250,6 +251,7 @@ class SkylandSignEngine:
                     signed_games=signed,
                     already_signed_games=already,
                     failed_games=failed,
+                    error=(messages[0] if failed else None),
                 )
             except Exception as retry_err:
                 err_msg = f'❌ 凭证刷新后签到仍失败: {retry_err}'

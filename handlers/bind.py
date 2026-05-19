@@ -175,7 +175,7 @@ async def handle_login(plugin, event: AstrMessageEvent):
 
 
 async def handle_unbind(plugin, event: AstrMessageEvent):
-    """处理 /skland unbind"""
+    """处理 /skland unbind（直接解绑，无需二次确认）"""
     if event.get_group_id():
         yield event.plain_result(
             "🔒 请在私聊中使用此命令\n发送 /skland unbind 到机器人私聊即可。"
@@ -189,27 +189,10 @@ async def handle_unbind(plugin, event: AstrMessageEvent):
         yield event.plain_result("❌ 你还没有绑定账号！")
         return
 
-    from astrbot.core.utils.session_waiter import session_waiter, SessionController
-
+    plugin.store.remove_user(sid)
     yield event.plain_result(
-        f"⚠️ 确定要解绑吗？\n"
+        f"✅ 已解绑！\n"
         f"角色: {state.game_info}\n"
-        f"绑定于: {state.bound_at[:10] if state.bound_at else '未知'}\n\n"
-        f"解绑后将停止自动签到。\n"
-        f"回复「确认」以解绑，回复其他取消。"
+        f"绑定于: {state.bound_at[:10] if state.bound_at else '未知'}\n"
+        f"将停止自动签到，数据已清除。"
     )
-
-    @session_waiter(timeout=30)
-    async def wait_confirm(controller: SessionController, ev: AstrMessageEvent):
-        reply = ev.message_str.strip()
-        if reply == "确认":
-            plugin.store.remove_user(sid)
-            await ev.send(ev.plain_result("✅ 已解绑！你的账号数据已清除。"))
-        else:
-            await ev.send(ev.plain_result("❌ 已取消解绑"))
-        controller.stop()
-
-    try:
-        await wait_confirm(event)
-    except TimeoutError:
-        yield event.plain_result("⏰ 操作超时，已取消。")

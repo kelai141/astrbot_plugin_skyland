@@ -3,12 +3,13 @@
 
 处理: /skland sign, /skland status, /skland push, /skland time
 """
-from datetime import date, datetime
+from datetime import datetime
 
 from astrbot.api.event import AstrMessageEvent
 
 from ..lib.notification import NotificationTemplates, PushPolicy
 from ..lib.skyland_engine import SignResult
+from ..lib.timeutil import beijing_now, beijing_today, BEIJING_TZ
 
 
 async def handle_sign(plugin, event: AstrMessageEvent):
@@ -91,8 +92,8 @@ async def handle_time_config(plugin, event: AstrMessageEvent, action: str = None
         plugin._save_user_state(sid, state)
 
         # 如果当前时间 ≥ 设置的时间 且 今天还没签过 → 立即触发签到
-        today = date.today().isoformat()
-        now = datetime.now()
+        today = beijing_today().isoformat()
+        now = beijing_now()
         if (h < now.hour or (h == now.hour and m <= now.minute)) \
                 and state.last_sign_date != today:
             yield event.plain_result(
@@ -144,7 +145,7 @@ async def handle_did(plugin, event: AstrMessageEvent):
             lines.append("✅ dId 来自数美 API")
 
         if _DID_CACHE_FILE and os.path.exists(_DID_CACHE_FILE):
-            mtime = datetime.fromtimestamp(os.path.getmtime(_DID_CACHE_FILE))
+            mtime = datetime.fromtimestamp(os.path.getmtime(_DID_CACHE_FILE), tz=BEIJING_TZ)
             lines.append(f"🕐 缓存时间: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
     else:
         lines.append("❌ 未生成 dId")

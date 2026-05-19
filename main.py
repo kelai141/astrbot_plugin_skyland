@@ -10,9 +10,7 @@
 - 管理员批量管理
 """
 import asyncio
-import json
 import random
-from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +29,7 @@ from .lib.skyland_engine import (
 )
 from .lib.notification import PushPolicy
 from .lib.security import set_cache_dir, fetch_did
+from .lib.timeutil import beijing_now, beijing_today
 
 # ==================== 路径配置 ====================
 
@@ -210,9 +209,9 @@ class SklandSignPlugin(Star):
 
             while True:
                 try:
-                    now = datetime.now()
+                    now = beijing_now()
                     current_minute_slot = now.hour * 60 + now.minute  # 0-1439
-                    today = date.today().isoformat()
+                    today = beijing_today().isoformat()
 
                     # 每 60 分钟打印一次心跳日志（方便排查循环是否存活）
                     if current_minute_slot % 60 == 0:
@@ -258,7 +257,7 @@ class SklandSignPlugin(Star):
                     last_checked_slot = current_minute_slot
 
                     # 等待到下一分钟
-                    sleep_sec = 60 - datetime.now().second + 0.5
+                    sleep_sec = 60 - beijing_now().second + 0.5
                     await asyncio.sleep(sleep_sec)
 
                 except asyncio.CancelledError:

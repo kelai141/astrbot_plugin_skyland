@@ -4,9 +4,10 @@
 处理: /skland list, /skland remove, /skland broadcast
 """
 import asyncio
-from datetime import date
 
 from astrbot.api.event import AstrMessageEvent
+
+from ..lib.timeutil import beijing_today
 
 
 async def handle_list_users(plugin, event: AstrMessageEvent):
@@ -20,7 +21,7 @@ async def handle_list_users(plugin, event: AstrMessageEvent):
         yield event.plain_result("📋 暂无已绑定的用户")
         return
 
-    today = date.today().isoformat()
+    today = beijing_today().isoformat()
     lines = [f"📋 已绑定用户列表 (共 {len(users)} 人)"]
     for i, (sid, info) in enumerate(users.items(), 1):
         is_signed = info.get("last_sign_date") == today

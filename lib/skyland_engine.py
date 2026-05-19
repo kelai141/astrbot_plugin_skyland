@@ -12,7 +12,7 @@ import asyncio
 import random
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from .skyland_api import (
@@ -21,6 +21,7 @@ from .skyland_api import (
     SkylandAuthError,
     parse_user_token,
 )
+from .timeutil import beijing_now, beijing_today
 
 
 # ==================== 数据模型 ====================
@@ -44,7 +45,7 @@ class SignResult:
     already_signed_games: list[str] = field(default_factory=list)   # v2.1: API 确认已签到的游戏
     failed_games: list[str] = field(default_factory=list)
     error: Optional[str] = None
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=lambda: beijing_now().isoformat())
 
     @property
     def is_all_already_signed(self) -> bool:
@@ -64,7 +65,7 @@ class UserSignState:
     last_sign_result: str = ''     # 上次签到结果文本
     push_enabled: bool = True      # 是否推送通知
     sign_time: str = '09:05'       # 用户签到时间 (HH:MM)
-    bound_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    bound_at: str = field(default_factory=lambda: beijing_now().isoformat())
     notify_target: str = ''        # 通知目标 (unified_msg_origin)
 
 
@@ -148,7 +149,7 @@ class SkylandSignEngine:
             token=token,
             cred=cred_data.get('cred', ''),
             sign_token=cred_data.get('token', token),
-            refreshed_at=datetime.now().isoformat(),
+            refreshed_at=beijing_now().isoformat(),
         )
 
         state = UserSignState(
@@ -199,7 +200,7 @@ class SkylandSignEngine:
                     failed.append(game)
 
             # 更新状态：API 已确认今天的签到状态
-            today = date.today().isoformat()
+            today = beijing_today().isoformat()
             state.last_sign_date = today
 
             if signed and not failed:
@@ -239,7 +240,7 @@ class SkylandSignEngine:
                     else:
                         failed.append(game)
 
-                today = date.today().isoformat()
+                today = beijing_today().isoformat()
                 state.last_sign_date = today
                 state.last_sign_result = ('✅ ' if not failed else '⚠️ ') + ' | '.join(messages)
 
@@ -291,7 +292,7 @@ class SkylandSignEngine:
         try:
             refreshed = datetime.fromisoformat(state.credential.refreshed_at)
             window = timedelta(hours=self.config.cred_refresh_window_hours)
-            if datetime.now() - refreshed > window:
+            if beijing_now() - refreshed > window:
                 await self._refresh_credential(state)
         except (ValueError, TypeError):
             pass
@@ -307,6 +308,6 @@ class SkylandSignEngine:
         cred_data = await self.api.get_cred_by_token(new_token)
         state.credential.cred = cred_data.get('cred', '')
         state.credential.sign_token = cred_data.get('token', new_token)
-        state.credential.refreshed_at = datetime.now().isoformat()
+        state.credential.refreshed_at = beijing_now().isoformat()
 
     # ==================== 工具 ====================

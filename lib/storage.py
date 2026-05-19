@@ -11,9 +11,11 @@ import json
 import os
 import shutil
 import tempfile
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from .timeutil import beijing_now
 
 try:
     from astrbot.api import logger
@@ -35,7 +37,7 @@ def _make_empty_store() -> dict:
         },
         "meta": {
             "version": 2,
-            "created_at": datetime.now().isoformat(),
+            "created_at": beijing_now().isoformat(),
         },
     }
 
@@ -170,7 +172,7 @@ class FileStore:
     def increment_signs(self):
         data = self.load()
         data["stats"]["total_signs"] = data["stats"].get("total_signs", 0) + 1
-        data["stats"]["last_auto_sign"] = datetime.now().isoformat()
+        data["stats"]["last_auto_sign"] = beijing_now().isoformat()
         self.save(data)
 
     # ---- 内部 ----

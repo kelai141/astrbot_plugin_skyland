@@ -9,10 +9,10 @@
 不依赖 AstrBot 消息发送机制，只产出消息内容，
 由上层 (main.py / handlers) 负责实际发送。
 """
-from datetime import date, datetime
 from typing import Optional
 
 from .skyland_engine import SignResult, UserSignState
+from .timeutil import beijing_today
 
 
 class NotificationTemplates:
@@ -21,7 +21,7 @@ class NotificationTemplates:
     @staticmethod
     def sign_success(state: UserSignState, result: SignResult) -> str:
         """签到成功通知"""
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         lines = [
             "🌠 森空岛自动签到完成",
             f"📅 {today}",
@@ -40,7 +40,7 @@ class NotificationTemplates:
     @staticmethod
     def sign_already_signed(state: UserSignState, result: SignResult) -> str:
         """已在签到时间前通过其他方式签到过"""
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         lines = [
             "🌠 森空岛签到状态",
             f"📅 {today}",
@@ -58,7 +58,7 @@ class NotificationTemplates:
         """签到失败通知"""
         lines = [
             "⚠️ 森空岛签到异常",
-            f"📅 {date.today().isoformat()}",
+            f"📅 {beijing_today().isoformat()}",
             f"❌ {result.error or '未知错误'}",
             "",
             "🔧 可能的原因：",
@@ -73,7 +73,7 @@ class NotificationTemplates:
     @staticmethod
     def sign_manual(state: UserSignState, result: SignResult) -> str:
         """手动签到结果"""
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         lines = [
             "🌠 森空岛签到完成",
             f"📅 {today}",
@@ -87,7 +87,7 @@ class NotificationTemplates:
     @staticmethod
     def sign_partial(state: UserSignState, result: SignResult) -> str:
         """部分成功通知（某些游戏签到成功，某些失败）"""
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         lines = [
             "⚠️ 森空岛签到部分完成",
             f"📅 {today}",
@@ -110,7 +110,7 @@ class NotificationTemplates:
     @staticmethod
     def status_report(state: UserSignState) -> str:
         """签到状态报告"""
-        today = date.today().isoformat()
+        today = beijing_today().isoformat()
         is_signed = (state.last_sign_date == today and
                      state.last_sign_result.startswith("✅"))
 

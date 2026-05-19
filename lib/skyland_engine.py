@@ -254,7 +254,14 @@ class SkylandSignEngine:
                     error=(messages[0] if failed else None),
                 )
             except Exception as retry_err:
-                err_msg = f'❌ 凭证刷新后签到仍失败: {retry_err}'
+                # 凭证刷新也失败了 → 不可恢复，提示用户重新绑定
+                err_msg = (
+                    f'你的登录凭证已过期，自动刷新也失败了。\n'
+                    f'请重新获取 token 后绑定：\n'
+                    f'1. /skland unbind\n'
+                    f'2. /skland bind <新token>\n\n'
+                    f'详情: {retry_err}'
+                )
                 state.last_sign_result = err_msg
                 return SignResult(success=False, error=err_msg)
 

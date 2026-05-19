@@ -66,7 +66,11 @@ async def handle_bind(plugin, event: AstrMessageEvent, token: str):
 
 
 async def handle_login(plugin, event: AstrMessageEvent):
-    """处理 /skland login（手机验证码登录）"""
+    """处理 /skland login（手机验证码登录）
+
+    使用单层 session_waiter + 阶段状态机，避免嵌套 waiter 导致的超时 bug。
+    阶段: 'phone' → 'code'
+    """
     if event.get_group_id():
         yield event.plain_result(
             "🔒 请在私聊中使用此命令（验证码不应暴露在群聊中）\n"
@@ -85,55 +89,63 @@ async def handle_login(plugin, event: AstrMessageEvent):
 
     from astrbot.core.utils.session_waiter import session_waiter, SessionController
 
-    yield event.plain_result('📱 请输入你的手机号（发送"取消"取消）：')
+    yield event.plain_result(
+        '📱 请输入你的手机号（发送"取消"取消）：'
+    )
 
-    phone_holder = {"value": ""}
+    # 状态机：用可变容器跨阶段传递状态
+    stage = {"value": "phone", "phone": ""}
 
-    @session_waiter(timeout=120)
-    async def wait_phone(controller: SessionController, ev: AstrMessageEvent):
+    @session_waiter(timeout=180)
+    async def wait_input(controller: SessionController, ev: AstrMessageEvent):
         text = ev.message_str.strip()
         if not text:
             return
+
+        # 通用取消
         if text == "取消":
             await ev.send(ev.plain_result("❌ 已取消"))
             controller.stop()
             return
 
-        phone = text.replace(" ", "").replace("-", "").replace("+86", "")
-        if not phone.isdigit() or len(phone) != 11:
-            await ev.send(ev.plain_result("⚠️ 手机号格式不正确，请输入11位手机号："))
-            return
+        # ──── 阶段1: 等待手机号 ────
+        if stage["value"] == "phone":
+            phone = text.replace(" ", "").replace("-", "").replace("+86", "")
+            if not phone.isdigit() or len(phone) != 11:
+                await ev.send(ev.plain_result("⚠️ 手机号格式不正确，请输入11位手机号："))
+                return  # 继续等待
 
-        phone_holder["value"] = phone
+            stage["phone"] = phone
 
-        # 发送验证码
-        try:
-            resp = await plugin.engine.api.send_login_code(phone)
-            if resp.get("status") != 0:
-                await ev.send(ev.plain_result(f"❌ {resp.get('msg', '发送验证码失败')}"))
+            # 发送验证码
+            try:
+                resp = await plugin.engine.api.send_login_code(phone)
+                if resp.get("status") != 0:
+                    await ev.send(ev.plain_result(f"❌ {resp.get('msg', '发送验证码失败')}"))
+                    controller.stop()
+                    return
+            except Exception as e:
+                await ev.send(ev.plain_result(f"❌ 发送验证码出错: {e}"))
                 controller.stop()
                 return
-        except Exception as e:
-            await ev.send(ev.plain_result(f"❌ 发送验证码出错: {e}"))
-            controller.stop()
-            return
 
-        await ev.send(ev.plain_result("📱 验证码已发送，请输入6位验证码："))
+            # 切换到验证码阶段
+            stage["value"] = "code"
+            await ev.send(ev.plain_result("📱 验证码已发送，请输入6位验证码："))
+            return  # 继续等待
 
-        @session_waiter(timeout=120)
-        async def wait_code(ctrl2: SessionController, ev2: AstrMessageEvent):
-            code = ev2.message_str.strip()
-            if not code:
-                return
+        # ──── 阶段2: 等待验证码 ────
+        if stage["value"] == "code":
+            code = text
             if not code.isdigit() or len(code) != 6:
-                await ev2.send(ev2.plain_result("⚠️ 验证码格式不正确，请输入6位数字："))
+                await ev.send(ev.plain_result("⚠️ 验证码格式不正确，请输入6位数字："))
                 return
 
             try:
-                resp = await plugin.engine.api.login_by_phone_code(phone_holder["value"], code)
+                resp = await plugin.engine.api.login_by_phone_code(stage["phone"], code)
                 if resp.get("status") != 0:
-                    await ev2.send(ev2.plain_result(f"❌ {resp.get('msg', '登录失败')}"))
-                    ctrl2.stop()
+                    await ev.send(ev.plain_result(f"❌ {resp.get('msg', '登录失败')}"))
+                    controller.stop()
                     return
 
                 token = resp["data"]["token"]
@@ -141,28 +153,21 @@ async def handle_login(plugin, event: AstrMessageEvent):
                 plugin._save_user_state(sid, state)
                 plugin._start_auto_sign_loop()
 
-                await ev2.send(ev2.plain_result(
+                await ev.send(ev.plain_result(
                     NotificationTemplates.bind_success(
                         info, plugin.config.get("sign_time", "09:05")
                     )
                 ))
-                ctrl2.stop()
+                controller.stop()
 
             except Exception as e:
-                await ev2.send(ev2.plain_result(f"❌ 登录失败: {e}"))
-                ctrl2.stop()
-
-        try:
-            await wait_code(ev)
-        except TimeoutError:
-            await ev.send(ev.plain_result("⏰ 验证码输入超时。"))
-        except Exception as e:
-            await ev.send(ev.plain_result(f"❌ 出错: {e}"))
+                await ev.send(ev.plain_result(f"❌ 登录失败: {e}"))
+                controller.stop()
 
     try:
-        await wait_phone(event)
+        await wait_input(event)
     except TimeoutError:
-        yield event.plain_result("⏰ 手机号输入超时。")
+        yield event.plain_result("⏰ 操作超时，已取消。\n请重新发送 /skland login 再次尝试。")
     except Exception as e:
         yield event.plain_result(f"❌ 出错: {e}")
 

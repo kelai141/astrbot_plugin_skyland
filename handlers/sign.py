@@ -89,7 +89,21 @@ async def handle_time_config(plugin, event: AstrMessageEvent, action: str = None
 
         state.sign_time = f"{h:02d}:{m:02d}"
         plugin._save_user_state(sid, state)
-        yield event.plain_result(f"⏰ 签到时间已设置为 每天 {state.sign_time}")
+
+        # 如果当前时间 ≥ 设置的时间 且 今天还没签过 → 立即触发签到
+        today = date.today().isoformat()
+        now = datetime.now()
+        if (h < now.hour or (h == now.hour and m <= now.minute)) \
+                and state.last_sign_date != today:
+            yield event.plain_result(
+                f"⏰ 签到时间已设置为 每天 {state.sign_time}\n"
+                f"⏳ 今日 {state.sign_time} 已过，现在为你执行签到…"
+            )
+            from .sign import handle_sign
+            async for msg in handle_sign(plugin, event):
+                yield msg
+        else:
+            yield event.plain_result(f"⏰ 签到时间已设置为 每天 {state.sign_time}")
     else:
         yield event.plain_result(
             f"⏰ 当前签到时间: 每天 {state.sign_time}\n"

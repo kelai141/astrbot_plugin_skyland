@@ -41,8 +41,17 @@ class SignResult:
     success: bool
     messages: list[str] = field(default_factory=list)
     signed_games: list[str] = field(default_factory=list)
+    already_signed_games: list[str] = field(default_factory=list)   # v2.1: API 确认已签到的游戏
+    failed_games: list[str] = field(default_factory=list)
     error: Optional[str] = None
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    @property
+    def is_all_already_signed(self) -> bool:
+        """所有游戏都是「已签到」状态（今天已通过API或其他方式签到）"""
+        return (len(self.already_signed_games) > 0
+                and len(self.signed_games) == 0
+                and len(self.failed_games) == 0)
 
 
 @dataclass
@@ -156,51 +165,90 @@ class SkylandSignEngine:
     # ==================== 签到 ====================
 
     async def sign(self, state: UserSignState) -> SignResult:
-        """为单个用户执行签到
+        """为单个用户执行签到（到达签到时间后无条件调用 API 确认状态）
 
-        Args:
-            state: 用户签到状态
+        - API 返回 code=0 → 新签到成功 → signed_games
+        - API 返回「已签到」→ 今天已签到 → already_signed_games
+        - API 返回其他错误 → 真实失败 → failed_games
 
-        Returns:
-            SignResult
+        无论如何都会更新 last_sign_date（API 已确认今天的签到状态）。
         """
         try:
-            # 检查凭证是否需要刷新
             await self._ensure_credential(state)
-
-            # 执行签到
-            logs = await self.api.do_sign(
+            raw_results = await self.api.do_sign(
                 state.credential.sign_token,
                 state.credential.cred,
             )
 
-            # 更新状态
+            # 分类整理结果
+            signed = []
+            already = []
+            failed = []
+            messages = []
+
+            for r in raw_results:
+                msg = r["message"]
+                game = r.get("game", "未知")
+                messages.append(msg)
+
+                if r["status"] == "signed":
+                    signed.append(game)
+                elif r["status"] == "already":
+                    already.append(game)
+                else:
+                    failed.append(game)
+
+            # 更新状态：API 已确认今天的签到状态
             today = date.today().isoformat()
             state.last_sign_date = today
-            state.last_sign_result = '✅ ' + ' | '.join(logs) if logs else '✅ 签到完成'
+
+            if signed and not failed:
+                state.last_sign_result = '✅ ' + ' | '.join(messages)
+            elif signed and failed:
+                state.last_sign_result = '⚠️ ' + ' | '.join(messages)
+            elif already and not failed:
+                state.last_sign_result = '🔄 ' + ' | '.join(messages)
+            else:
+                state.last_sign_result = '❌ ' + ' | '.join(messages)
 
             return SignResult(
-                success=True,
-                messages=logs,
-                signed_games=self._extract_games(logs),
+                success=(len(failed) == 0),
+                messages=messages,
+                signed_games=signed,
+                already_signed_games=already,
+                failed_games=failed,
             )
 
         except SkylandAuthError as e:
-            # 认证失败，尝试刷新凭证后重试一次
+            # 认证失败，刷新后重试一次
             try:
                 await self._refresh_credential(state)
-                logs = await self.api.do_sign(
+                raw_results = await self.api.do_sign(
                     state.credential.sign_token,
                     state.credential.cred,
                 )
+                signed, already, failed, messages = [], [], [], []
+                for r in raw_results:
+                    msg = r["message"]
+                    game = r.get("game", "未知")
+                    messages.append(msg)
+                    if r["status"] == "signed":
+                        signed.append(game)
+                    elif r["status"] == "already":
+                        already.append(game)
+                    else:
+                        failed.append(game)
+
                 today = date.today().isoformat()
                 state.last_sign_date = today
-                state.last_sign_result = '✅ ' + ' | '.join(logs) if logs else '✅ 签到完成'
+                state.last_sign_result = ('✅ ' if not failed else '⚠️ ') + ' | '.join(messages)
 
                 return SignResult(
-                    success=True,
-                    messages=logs,
-                    signed_games=self._extract_games(logs),
+                    success=(len(failed) == 0),
+                    messages=messages,
+                    signed_games=signed,
+                    already_signed_games=already,
+                    failed_games=failed,
                 )
             except Exception as retry_err:
                 err_msg = f'❌ 凭证刷新后签到仍失败: {retry_err}'
@@ -262,17 +310,3 @@ class SkylandSignEngine:
         state.credential.refreshed_at = datetime.now().isoformat()
 
     # ==================== 工具 ====================
-
-    @staticmethod
-    def _extract_games(logs: list[str]) -> list[str]:
-        """从日志中提取游戏名"""
-        games = []
-        for log in logs:
-            if log.startswith('✅ [') or log.startswith('❌ ['):
-                try:
-                    game = log.split(']')[0].split('[')[1]
-                    if game not in games:
-                        games.append(game)
-                except IndexError:
-                    pass
-        return games

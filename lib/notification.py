@@ -38,6 +38,22 @@ class NotificationTemplates:
         return "\n".join(lines)
 
     @staticmethod
+    def sign_already_signed(state: UserSignState, result: SignResult) -> str:
+        """已在签到时间前通过其他方式签到过"""
+        today = date.today().isoformat()
+        lines = [
+            "🌠 森空岛签到状态",
+            f"📅 {today}",
+        ]
+        if result.messages:
+            lines.extend(result.messages)
+        lines.append("")
+        lines.append("💡 今天已经签到过了，无需重复操作~")
+        lines.append("💡 发送 /skland push off 关闭每日推送")
+
+        return "\n".join(lines)
+
+    @staticmethod
     def sign_failed(state: UserSignState, result: SignResult) -> str:
         """签到失败通知"""
         lines = [
@@ -161,6 +177,14 @@ class PushPolicy:
         if not state.push_enabled:
             return PushDecision(should_push=False, reason="push_disabled")
 
+        # 全部已签到（API 确认今天已通过其他方式签到）
+        if result.is_all_already_signed:
+            return PushDecision(
+                should_push=True,
+                message=NotificationTemplates.sign_already_signed(state, result),
+                reason="auto_already_signed",
+            )
+
         # 全部成功
         if result.success and all(
             m.startswith("✅") for m in result.messages if m
@@ -181,7 +205,7 @@ class PushPolicy:
                 reason="auto_failed",
             )
 
-        # 部分成功
+        # 部分成功（含部分已签、部分失败等混合场景）
         return PushDecision(
             should_push=True,
             message=NotificationTemplates.sign_partial(state, result),

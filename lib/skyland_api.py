@@ -381,8 +381,27 @@ class SkylandApiClient:
         logger.info(f"[角色] 获取到 {len(chars)} 个角色")
         return chars
 
-    async def sign_arknights(self, signing_token: str, cred: str, char_data: dict) -> str:
-        """明日方舟签到"""
+    @staticmethod
+    def _is_already_signed_response(data: dict) -> bool:
+        """判断 API 响应是否为「今日已签到」
+
+        森空岛 API 在重复签到时返回非零 code，message 中通常包含"已签到"等字样。
+        本方法通过 code + message 双重匹配来判定。
+        """
+        code = data.get('code')
+        if code == 0:
+            return False
+        msg = str(data.get('message', '')).lower()
+        keywords = ['已签到', '已经签到', 'already', '重复签到', '今日已签']
+        return any(kw in msg for kw in keywords)
+
+    async def sign_arknights(self, signing_token: str, cred: str, char_data: dict) -> tuple[str, str]:
+        """明日方舟签到
+
+        Returns:
+            (status, message)
+            status: 'signed' | 'already' | 'failed'
+        """
         body = {'gameId': char_data.get('gameId'), 'uid': char_data.get('uid')}
         url = SIGN_URL_MAPPING['arknights']
         headers = _BASE_HEADERS.copy()
@@ -394,18 +413,27 @@ class SkylandApiClient:
         channel = char_data.get('channelName', '')
         nickname = char_data.get('nickName', '')
 
-        if resp.data.get('code') != 0:
-            return f'❌ [{game_name}] {nickname}({channel}) 签到失败: {resp.data.get("message", "未知错误")}'
+        code = resp.data.get('code')
+        if code == 0:
+            awards = resp.data['data']['awards']
+            result_parts = []
+            for award in awards:
+                res = award['resource']
+                result_parts.append(f'{res["name"]}×{award.get("count", 1)}')
+            return ('signed', f'✅ [{game_name}] {nickname}({channel}) 签到成功，获得: {" ".join(result_parts)}')
 
-        awards = resp.data['data']['awards']
-        result_parts = []
-        for award in awards:
-            res = award['resource']
-            result_parts.append(f'{res["name"]}×{award.get("count", 1)}')
-        return f'✅ [{game_name}] {nickname}({channel}) 签到成功，获得: {" ".join(result_parts)}'
+        if self._is_already_signed_response(resp.data):
+            return ('already', f'🔄 [{game_name}] {nickname}({channel}) 今天已签到过啦')
 
-    async def sign_endfield(self, signing_token: str, cred: str, char_data: dict) -> list[str]:
-        """终末地签到（可能多角色）"""
+        return ('failed', f'❌ [{game_name}] {nickname}({channel}) 签到失败: {resp.data.get("message", "未知错误")}')
+
+    async def sign_endfield(self, signing_token: str, cred: str, char_data: dict) -> list[tuple[str, str]]:
+        """终末地签到（可能多角色）
+
+        Returns:
+            [(status, message), ...]
+            status: 'signed' | 'already' | 'failed'
+        """
         roles: list = char_data.get('roles', [])
         game_name = char_data.get('gameName', '终末地')
         channel = char_data.get('channelName', '')
@@ -425,9 +453,8 @@ class SkylandApiClient:
             resp = await self.post(url, headers=headers)
             j = resp.data
 
-            if j.get('code') != 0:
-                results.append(f'❌ [{game_name}] {nickname}({channel}) 签到失败: {j.get("message", "未知错误")}')
-            else:
+            code = j.get('code')
+            if code == 0:
                 awards_result = []
                 result_data = j['data']
                 info_map = result_data.get('resourceInfoMap', {})
@@ -437,15 +464,20 @@ class SkylandApiClient:
                         res_count = res_item.get('count', 1)
                         award_name = info_map.get(str(res_id), f'ID:{res_id}')
                         awards_result.append(f'{award_name}×{res_count}')
-                results.append(
+                msg = (
                     f'✅ [{game_name}] {nickname}({channel}) 签到成功，获得: {", ".join(awards_result)}'
                     if awards_result
                     else f'✅ [{game_name}] {nickname}({channel}) 签到成功'
                 )
+                results.append(('signed', msg))
+            elif self._is_already_signed_response(j):
+                results.append(('already', f'🔄 [{game_name}] {nickname}({channel}) 今天已签到过啦'))
+            else:
+                results.append(('failed', f'❌ [{game_name}] {nickname}({channel}) 签到失败: {j.get("message", "未知错误")}'))
 
         return results
 
-    async def do_sign(self, signing_token: str, cred: str) -> list[str]:
+    async def do_sign(self, signing_token: str, cred: str) -> list[dict]:
         """执行完整签到流程
 
         Args:
@@ -453,32 +485,37 @@ class SkylandApiClient:
             cred: Credential 字符串
 
         Returns:
-            签到结果消息列表
+            [{"status": "signed"|"already"|"failed", "message": "...", "game": "arknights"}, ...]
         """
         logger.info("[签到] 开始签到流程…")
         characters = await self.get_binding_list(signing_token, cred)
-        logs = []
+        results = []
 
         for char in characters:
             app_code = char.get('appCode', '')
             game_name = char.get('gameName', '未知')
             try:
                 if app_code == 'arknights':
-                    msg = await self.sign_arknights(signing_token, cred, char)
-                    logs.append(msg)
+                    status, msg = await self.sign_arknights(signing_token, cred, char)
+                    results.append({"status": status, "message": msg, "game": game_name})
+                    logger.info(f"[签到] {game_name}: {status} → {msg}")
                 elif app_code == 'endfield':
-                    msgs = await self.sign_endfield(signing_token, cred, char)
-                    logs.extend(msgs)
+                    items = await self.sign_endfield(signing_token, cred, char)
+                    for status, msg in items:
+                        results.append({"status": status, "message": msg, "game": game_name})
+                    logger.info(f"[签到] {game_name}: {len(items)} 个角色 → {[s for s,_ in items]}")
                 else:
-                    logs.append(f'⚠️ [{game_name}] 暂不支持的签到类型: {app_code}')
-                logger.info(f"[签到] {game_name}: {msg if isinstance(msg, str) else str(msgs)}")
+                    results.append({"status": "skipped", "message": f'⚠️ [{game_name}] 暂不支持的签到类型: {app_code}', "game": game_name})
             except Exception as e:
                 err_msg = f'❌ [{game_name}] 签到异常: {e}'
-                logs.append(err_msg)
+                results.append({"status": "failed", "message": err_msg, "game": game_name})
                 logger.error(f"[签到] {err_msg}", exc_info=True)
 
-        logger.info(f"[签到] 流程完成，共处理 {len(characters)} 个角色")
-        return logs
+        logger.info(f"[签到] 流程完成，共处理 {len(characters)} 个角色，"
+                    f"新签到: {sum(1 for r in results if r['status']=='signed')}，"
+                    f"已签: {sum(1 for r in results if r['status']=='already')}，"
+                    f"失败: {sum(1 for r in results if r['status']=='failed')}")
+        return results
 
     # ---- 账号验证与登录 ----
 

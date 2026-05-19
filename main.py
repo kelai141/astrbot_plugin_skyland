@@ -216,7 +216,10 @@ class SklandSignPlugin(Star):
                         uh, um = 9, 5
                     if uh == current_h and um == current_m:
                         state = self._load_user_state(sid)
-                        if state and state.last_sign_date != today:
+                        if state:
+                            # v2.1: 不再用 last_sign_date 门控。
+                            # 到达签到时间后无条件调用 API，由 API 返回结果
+                            # 确认是否已签到，而非本地存储猜测。
                             due_users.append((sid, state))
 
                 if due_users:

@@ -16,7 +16,6 @@ from ..lib.skyland_api import (
 )
 from ..lib.skyland_engine import UserSignState, UserCredential
 from ..lib.notification import NotificationTemplates
-from ..lib.security import _get_login_headers
 
 
 async def handle_bind(plugin, event: AstrMessageEvent, token: str):

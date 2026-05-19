@@ -185,7 +185,16 @@ class SklandSignPlugin(Star):
         if not target:
             return
         chain = MessageChain().message(message)
-        await self.context.send_message(target, chain)
+        try:
+            await self.context.send_message(target, chain)
+        except ValueError as e:
+            if "不合法的 session" in str(e) or "not enough values" in str(e):
+                logger.warning(
+                    f"[通知] notify_target 格式过旧 ({target[:32]})，"
+                    f"跳过通知。请用户发送 /skland bind 重新绑定以更新通知目标。"
+                )
+            else:
+                raise
 
     # ==================== 定时签到 ====================
 

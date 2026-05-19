@@ -56,7 +56,8 @@ async def handle_bind(plugin, event: AstrMessageEvent, token: str):
         yield event.plain_result(f"❌ 绑定失败: {e}")
         return
 
-    # 保存
+    # 保存（notify_target 使用 AstrBot v4.24 unified_msg_origin 格式）
+    state.notify_target = event.unified_msg_origin
     plugin._save_user_state(sid, state)
     plugin._start_auto_sign_loop()
 
@@ -150,6 +151,7 @@ async def handle_login(plugin, event: AstrMessageEvent):
 
                 token = resp["data"]["token"]
                 state, info = await plugin.engine.bind_user(sid, token)
+                state.notify_target = ev.unified_msg_origin
                 plugin._save_user_state(sid, state)
                 plugin._start_auto_sign_loop()
 

@@ -155,9 +155,25 @@ v2.0 对插件进行了全面重构，核心改进：
 
 ## 📄 开源许可
 
-本项目基于 [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign) (Copyright © 2023 xxyz30) 二次开发，沿用 MIT 许可证。
+**AGPL-3.0** — GNU Affero General Public License v3.0
 
-原始签到核心算法（签名、数美加密）移植自上述项目。  
-AstrBot 插件架构及 v2.0 重构版权归属 kelai141。
+### 著作权归属
+
+本项目基于以下两个开源项目二次开发：
+
+| 母项目 | 原始许可 | 著作权 | 移植部分 |
+|--------|----------|--------|----------|
+| [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign) | MIT | Copyright © 2023 xxyz30 | 森空岛签到核心算法（HMAC-SHA256→MD5 签名、数美 DES/AES 加密） |
+| [AstrBotDevs/AstrBot](https://github.com/AstrBotDevs/AstrBot) | — | AstrBotDevs | 插件框架（Star/Context/filter 接口） |
+
+AstrBot 插件适配、架构设计、签到引擎重构及全部新增代码：Copyright © 2026 kelai141。
+
+### AGPL-3.0 关键条款
+
+- ✅ **自由使用** — 可运行、复制、分发本软件
+- ✅ **自由修改** — 可修改源代码，但衍生作品须同样以 AGPL-3.0 发布
+- ⚠️ **网络服务** — 如果你将修改后的版本作为网络服务运行，必须向用户提供完整的对应源代码
+- ⚠️ **保留声明** — 分发时必须保留原始著作权声明和许可声明
+- ❌ **无担保** — 本软件不提供任何形式的担保
 
 详见 [LICENSE](LICENSE)。

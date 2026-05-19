@@ -107,37 +107,72 @@ class FileStore:
     # ---- 保存 ----
 
     def save(self, data: Optional[dict] = None):
-        """原子化保存数据"""
+        """原子化保存数据（防御性：失败不抛异常，但会记录错误日志）"""
         if data is not None:
             self._data = data
 
         if self._data is None:
             return
 
+        tmp_path = ""
+        succeeded = False
         try:
-            # 写入临时文件
             fd, tmp_path = tempfile.mkstemp(
                 dir=str(self._data_dir), prefix="users_", suffix=".json"
             )
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, ensure_ascii=False, indent=2)
 
-            # 备份当前文件
             if os.path.exists(self._data_file):
                 shutil.copy2(self._data_file, self._backup_file)
 
-            # 原子替换
             os.replace(tmp_path, self._data_file)
+            tmp_path = ""  # 已替换，不清理
+
+            # 写入后校验
+            file_size = os.path.getsize(self._data_file)
+            if file_size < 10:
+                raise IOError(f"文件大小异常: {file_size} bytes")
+            succeeded = True
+            logger.debug(f"数据已保存 ({len(self._data.get('users', {}))} 用户, {file_size} bytes)")
 
         except Exception as e:
-            logger.error(f"保存数据失败: {e}")
-            # 尝试从备份恢复
-            if os.path.exists(self._backup_file) and self._data is None:
+            logger.error(f"❌ 保存数据到磁盘失败: {e}", exc_info=True)
+            # 尝试从备份恢复内存
+            if os.path.exists(self._backup_file):
                 try:
                     with open(self._backup_file, "r", encoding="utf-8") as f:
                         self._data = json.load(f)
+                    logger.info("已从备份文件恢复内存数据")
+                except Exception as be:
+                    logger.error(f"备份恢复也失败: {be}")
+
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
                 except Exception:
-                    self._data = _make_empty_store()
+                    pass
+
+        return succeeded
+
+    def flush(self):
+        """强制将内存数据写入磁盘（terminate 等关键时机调用）
+
+        与 save() 不同：flush 失败会记录 critical 级别日志，
+        因为这意味着插件重载后用户数据会丢失。
+        """
+        if self._data is None:
+            return
+        user_count = len(self._data.get("users", {}))
+        ok = self.save(self._data)
+        if ok:
+            logger.info(f"数据已安全刷入磁盘 ({user_count} 用户)")
+        else:
+            logger.critical(
+                f"⚠️ 数据写入磁盘失败！{user_count} 个用户数据可能在下一次重载后丢失。"
+                f"请检查磁盘空间和目录权限: {self._data_file}"
+            )
 
     # ---- 用户操作 ----
 

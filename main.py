@@ -109,7 +109,11 @@ class SklandSignPlugin(Star):
         logger.info(f"森空岛签到插件 v2.0.0 已初始化，{len(self.store.get_users())} 个用户")
 
     async def terminate(self):
-        """插件卸载：取消后台任务 → 关闭引擎"""
+        """插件卸载：刷新数据 → 取消后台任务 → 关闭引擎"""
+        # 强制保存内存数据到磁盘
+        self.store.flush()
+        logger.info("数据已刷新到磁盘")
+
         if self._sign_task and not self._sign_task.done():
             self._sign_task.cancel()
             try:

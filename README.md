@@ -1,6 +1,6 @@
 # 🌠 森空岛自动签到 AstrBot 插件
 
-[![AstrBot](https://img.shields.io/badge/AstrBot-v4.23+-blue)](https://github.com/AstrBotDevs/AstrBot)
+基于 [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign) 开发的 AstrBot 森空岛签到插件。
 
 **纯聊天交互，无需 WebUI 配置** — 在聊天软件中完成绑定、签到、查看状态等所有操作。
 
@@ -20,17 +20,16 @@
 ## 📋 指令列表
 
 | 指令 | 说明 | 场景 | 管理员 |
-|------|------|:----:|:-----:|
+|------|------|------|--------|
 | `/skland help` | 显示帮助信息 | 群聊/私聊 | — |
 | `/skland bind <token>` | 绑定鹰角通行证 token | 🔒 仅私聊 | — |
 | `/skland login` | 通过手机号+验证码登录绑定 | 🔒 仅私聊 | — |
 | `/skland sign` | 立即手动签到 | 群聊/私聊 | — |
 | `/skland status` | 查看我的签到状态 | 群聊/私聊 | — |
 | `/skland push on\|off` | 开关自动签到推送通知 | 群聊/私聊 | — |
+| `/skland time [set HH:MM]` | 查看/设置自动签到时间 | 群聊/私聊 | — |
 | `/skland unbind` | 解绑账号 | 🔒 仅私聊 | — |
 | `/skland did` | 查看设备指纹状态 | 群聊/私聊 | — |
-| `/skland time` | 查看自动签到时间 | 群聊/私聊 | 🔒 |
-| `/skland time set HH:MM` | 设置自动签到时间 | 群聊/私聊 | 🔒 |
 | `/skland list` | 查看所有已绑定用户 | 群聊/私聊 | 🔒 |
 | `/skland remove <id>` | 移除指定用户的绑定 | 群聊/私聊 | 🔒 |
 | `/skland broadcast <msg>` | 向所有用户群发消息 | 群聊/私聊 | 🔒 |
@@ -40,7 +39,7 @@
 在 AstrBot 中使用以下命令安装：
 
 ```
-plugin i https://github.com/kelai141/skyland-astrbot
+plugin i https://github.com/kelai141/astrbot_plugin_skyland
 ```
 
 或手动将插件目录放入 `data/plugins/` 后重载插件。
@@ -49,10 +48,10 @@ plugin i https://github.com/kelai141/skyland-astrbot
 
 ### 方式一：Token 绑定（推荐）
 
-1. 打开 [森空岛官网](https://www.skland.com) 并登录
-2. 按 F12 打开开发者工具 → 控制台（Console）
+1. 打开 [森空岛官网](https://www.skland.com/) 并登录
+2. 按 `F12` 打开开发者工具 → 控制台（Console）
 3. 粘贴以下代码获取 token：
-   ```javascript
+   ```js
    copy(JSON.parse(localStorage.getItem('userInfo')).token)
    ```
 4. 在聊天中发送：
@@ -66,60 +65,99 @@ plugin i https://github.com/kelai141/skyland-astrbot
 
 ### 签到
 
-- **自动签到**：绑定后每天 09:05 自动签到，结果推送到你的聊天
+- **自动签到**：绑定后每天在你设定的时间自动签到，结果推送到你的聊天
 - **手动签到**：发送 `/skland sign` 立即签到
 
 ## 📦 项目结构
 
 ```
 astrbot_plugin_skyland/
-├── metadata.yaml         # 插件元数据
-├── main.py               # 插件主入口（指令 + 定时任务）
-├── requirements.txt      # 依赖声明
+├── metadata.yaml           # 插件元数据
+├── main.py                 # 插件主入口（生命周期 + 指令路由）
+├── requirements.txt        # 依赖声明
+├── _conf_schema.json       # WebUI 配置 Schema
 ├── lib/
 │   ├── __init__.py
-│   ├── skyland.py        # 签到核心逻辑（移植）
-│   └── security.py       # 设备指纹 dId 生成（移植）
+│   ├── skyland_api.py      # 森空岛 API 客户端（签名、重试、连接池）
+│   ├── skyland_engine.py   # 签到引擎（纯业务逻辑，与框架解耦）
+│   ├── security.py         # 设备指纹 dId 生成（异步化）
+│   ├── storage.py          # 数据持久化（原子写入 + 备份恢复）
+│   └── notification.py     # 推送系统（消息模板 + 推送策略）
+├── handlers/
+│   ├── __init__.py
+│   ├── bind.py             # 绑定/登录/解绑处理器
+│   ├── sign.py             # 签到/状态/推送配置处理器
+│   └── admin.py            # 管理员命令处理器
 └── README.md
 ```
+
+## 🏗️ 架构设计（v2.0）
+
+v2.0 对插件进行了全面重构，核心改进：
+
+| 模块 | 职责 | 解耦程度 |
+|------|------|----------|
+| `skyland_api.py` | 森空岛 API 客户端（HTTP、签名、重试） | 零框架依赖 |
+| `skyland_engine.py` | 签到编排、凭证管理 | 零框架依赖 |
+| `security.py` | 数美设备指纹 | 零框架依赖 |
+| `notification.py` | 消息模板、推送策略 | 零框架依赖 |
+| `storage.py` | 数据持久化 | 零框架依赖 |
+| `main.py` | AstrBot 生命周期、指令路由 | 仅路由层 |
+| `handlers/` | 命令处理逻辑 | AstrBot 适配层 |
+
+**关键改进：**
+
+- **连接池复用**：整个引擎共享一个 `aiohttp.ClientSession`，避免每次请求创建新连接
+- **签名对齐**：完全对齐原始 skyland-auto-sign 的签名算法（HMAC-SHA256 → MD5）
+- **异步安全**：移除所有 `requests` 同步调用，全部使用 `aiohttp`
+- **凭证自动刷新**：签到前检查凭证有效期，过期自动刷新后重试
+- **防风控**：多用户签到间随机间隔（基础间隔 ±50%）
+- **数据安全**：原子写入 + 自动备份 + 旧版迁移
 
 ## 🔄 数据存储
 
 用户数据保存在 `data/plugin_data/astrbot_plugin_skyland/users.json`，无需手动编辑。
 
+首次安装时自动从旧插件名 `astrbot_plugin_skland` 迁移数据。
+
 ## 📝 注意事项
 
 - token 的有效期较长，但若遇到签到失败提示"用户未登录"，请重新绑定
-- 各用户之间签到间隔 2 秒，防止 API 限流
-- 首次使用会自动获取 dId（设备指纹），该值会缓存
+- 各用户之间签到间隔随机浮动，防止 API 限流
+- 首次使用会自动获取 dId（设备指纹），该值会被缓存到磁盘
+- `_conf_schema.json` 可在 WebUI 中修改默认签到时间、推送开关等配置
+
+## 📝 变更日志
+
+### v2.0.0 (2026-05-19)
+
+**架构重构：**
+- 🔄 模块化拆分：引擎/API/存储/通知/处理器 完全解耦
+- 🔄 统一连接池管理（SkylandApiClient）
+- 🔄 移除 `requests` 同步调用，100% 异步
+- 🔄 提取 `SkylandSignEngine` 纯业务逻辑层
+- 🔄 提取 `PushPolicy` 推送策略引擎
+- 🔄 `FileStore` 统一数据持久化接口
+- 🔄 `handlers/` 命令处理器独立模块
+
+**功能增强：**
+- ✨ 凭证自动刷新机制
+- ✨ 签名算法完全对齐原始 skyland-auto-sign
+- ✨ 改进的 dId 管理（异步获取 + 磁盘缓存）
+- ✨ WebUI 配置支持（`_conf_schema.json`）
+- 🛡️ 改进的重试与错误处理
+
+### v1.4.0 (2026-05-18)
+
+- 📢 新增 `/skland push on|off` 推送开关
+- ⏰ 新增 `/skland time` 签到时间配置
+- 🛡️ 连接池复用、随机间隔防风控、批量原子保存
 
 ## 📄 开源许可
 
 本项目基于 [FancyCabbage/skyland-auto-sign](https://gitee.com/FancyCabbage/skyland-auto-sign) (Copyright © 2023 xxyz30) 二次开发，沿用 MIT 许可证。
 
-- 原始签到核心逻辑（`lib/skyland.py`、`lib/security.py`）移植自上述项目
-- AstrBot 插件适配及后续修改版权归属 kelai141
+原始签到核心算法（签名、数美加密）移植自上述项目。  
+AstrBot 插件架构及 v2.0 重构版权归属 kelai141。
 
-详见 [LICENSE](./LICENSE)。
-
-## 📝 变更日志
-
-### v1.4.0 (2026-05-18)
-- 📢 **新增**：`/skland push on|off` 推送开关（默认开启）
-- ⏰ **新增**：`/skland time` `/skland time set HH:MM` 签到时间配置
-- 🛡️ **健壮性**：连接池复用、随机间隔防风控、批量原子保存
-- 🔧 **推送**：仅私聊用户 + 通知底部附关闭提示
-
-### v1.3.x
-- 📋 **日志规范化**：全部切换为 `astrbot.api.logger`，日志直接输出到 AstrBot 后台
-- 🔍 **全链路详细日志**：`verify_token` → `get_cred_by_token` → `get_binding_list` 每步均有 INFO 日志
-- 🐛 **改进异常消息**：失败时附带 `code`、异常类型、原始响应摘要，方便后台排查
-- 🛡️ **JSON 解析保护**：`api_get`/`api_post` 对非 JSON 响应做保护性处理
-
-### v1.1.0 (2026-05-18)
-- 🔧 **修复**：签名请求头补全 `dId` 字段，与原始 skyland-auto-sign 完全一致
-- 🔧 **修复**：`/skland broadcast` 命令正确提取消息内容
-- 🔧 **修复**：终末地签到显式添加 `dId` 头
-
-### v1.0.0
-- 初始版本: 纯聊天交互的森空岛自动签到插件
+详见 [LICENSE](LICENSE)。

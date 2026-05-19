@@ -1,0 +1,44 @@
+{
+  "sign_time": {
+    "description": "默认每日自动签到时间（HH:MM 格式，24小时制）",
+    "type": "string",
+    "default": "09:05",
+    "hint": "所有用户默认的签到时间，用户可通过 /skland time set HH:MM 自定义"
+  },
+  "push_enabled_default": {
+    "description": "新用户是否默认开启推送通知",
+    "type": "bool",
+    "default": true,
+    "hint": "新绑定的用户默认是否接收签到结果推送"
+  },
+  "sign_interval_seconds": {
+    "description": "多用户签到间隔（秒），用于防风控",
+    "type": "int",
+    "default": 2,
+    "hint": "多用户签到之间的随机浮动基础间隔，防止触发 API 限流"
+  },
+  "sign_retry_count": {
+    "description": "签到失败重试次数",
+    "type": "int",
+    "default": 2,
+    "hint": "单次签到失败后自动重试的次数"
+  },
+  "cred_refresh_window_hours": {
+    "description": "凭证刷新窗口（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "距离上次凭证刷新超过此时间后，自动签到前会先刷新凭证"
+  },
+  "admin_users": {
+    "description": "管理员用户 ID 列表（用于 /skland list / remove / broadcast 等管理指令）",
+    "type": "list",
+    "default": [],
+    "hint": "AstrBot 管理员自动拥有此权限，此处可额外添加"
+  },
+  "log_level": {
+    "description": "插件日志级别",
+    "type": "string",
+    "default": "INFO",
+    "options": ["DEBUG", "INFO", "WARNING", "ERROR"]
+  }
+}

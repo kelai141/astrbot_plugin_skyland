@@ -362,7 +362,14 @@ class SkylandApiClient:
     # ---- 角色与签到 ----
 
     async def get_binding_list(self, signing_token: str, cred: str) -> list[dict]:
-        """获取已绑定的游戏角色列表"""
+        """获取已绑定的游戏角色列表（展平嵌套结构，对齐原仓库）
+
+        森空岛 API 返回两层结构:
+          [{appCode: "arknights", gameName: "...", bindingList: [{uid, gameId, nickName, ...}]}, ...]
+
+        原仓库 skyland-auto-sign 会遍历 bindingList 并将父级的 appCode 复制到子项。
+        不展平会导致 sign_arknights/sign_endfield 拿不到 uid/gameId/nickName 等字段。
+        """
         logger.info("[角色] 获取已绑定角色列表…")
         headers = _BASE_HEADERS.copy()
         headers['cred'] = cred
@@ -377,9 +384,26 @@ class SkylandApiClient:
                 response=resp.data,
             )
 
-        chars = resp.data['data']['list']
-        logger.info(f"[角色] 获取到 {len(chars)} 个角色")
-        return chars
+        raw_list = resp.data['data']['list']
+
+        # 展平嵌套结构（对齐原仓库 FancyCabbage/skyland-auto-sign）
+        characters = []
+        for item in raw_list:
+            app_code = item.get('appCode', '')
+            if app_code not in ('arknights', 'endfield'):
+                continue
+            bindings = item.get('bindingList', [])
+            for binding in bindings:
+                binding['appCode'] = app_code
+                # 父级的 gameName/channelName 可能不在子项中，补上去
+                if not binding.get('gameName'):
+                    binding['gameName'] = item.get('gameName', '')
+                if not binding.get('channelName'):
+                    binding['channelName'] = item.get('channelName', '')
+            characters.extend(bindings)
+
+        logger.info(f"[角色] 获取到 {len(raw_list)} 个游戏，展平后 {len(characters)} 个角色")
+        return characters
 
     @staticmethod
     def _is_already_signed_response(data: dict) -> bool:

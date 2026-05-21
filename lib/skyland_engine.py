@@ -67,6 +67,7 @@ class UserSignState:
     sign_time: str = '09:05'       # 用户签到时间 (HH:MM)
     bound_at: str = field(default_factory=lambda: beijing_now().isoformat())
     notify_target: str = ''        # 通知目标 (unified_msg_origin)
+    token_expired: bool = False    # 凭证已彻底过期，停止自动签到
 
 
 @dataclass
@@ -254,7 +255,8 @@ class SkylandSignEngine:
                     error=(messages[0] if failed else None),
                 )
             except Exception as retry_err:
-                # 凭证刷新也失败了 → 不可恢复，提示用户重新绑定
+                # 凭证刷新也失败了 → 不可恢复，标记为过期并提示重新绑定
+                state.token_expired = True
                 err_msg = (
                     f'你的登录凭证已过期，自动刷新也失败了。\n'
                     f'请重新获取 token 后绑定：\n'

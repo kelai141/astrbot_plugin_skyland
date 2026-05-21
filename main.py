@@ -164,6 +164,7 @@ class SklandSignPlugin(Star):
             sign_time=data.get("sign_time", "09:05"),
             bound_at=data.get("bound_at", ""),
             notify_target=data.get("notify_target", sender_id),
+            token_expired=data.get("token_expired", False),
         )
 
     def _save_user_state(self, sender_id: str, state: UserSignState):
@@ -180,8 +181,9 @@ class SklandSignPlugin(Star):
             "sign_time": state.sign_time,
             "bound_at": state.bound_at,
             "notify_target": state.notify_target,
+            "token_expired": state.token_expired,
         })
-        logger.info(f"[数据] 已保存用户 {sender_id[:16]} | sign_time={state.sign_time} | push={state.push_enabled}")
+        logger.info(f"[数据] 已保存用户 {sender_id[:16]} | sign_time={state.sign_time} | push={state.push_enabled}" + (" | ⚠️已过期" if state.token_expired else ""))
 
     async def _notify_user(self, user_info: dict, message: str):
         """向用户发送通知消息"""
@@ -257,8 +259,10 @@ class SklandSignPlugin(Star):
                                 uh, um = 9, 5
                             if uh == ch and um == cm:
                                 state = self._load_user_state(sid)
-                                if state:
+                                if state and not state.token_expired:
                                     due_users.append((sid, state))
+                                elif state and state.token_expired:
+                                    logger.debug(f"[{ch:02d}:{cm:02d}] 跳过过期用户 {sid[:16]}")
 
                         if due_users:
                             logger.info(

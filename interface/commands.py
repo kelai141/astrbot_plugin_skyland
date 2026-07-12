@@ -1,0 +1,1 @@
+[cache hygiene: omitted completed write.content argument, 2.2KB, approx 592 token(s), 51 line(s); see following tool result] preview="\"\"\" 接口层 — AstrBot 命令注册与调度 \"\"\" from astrbot.api.event import filter, AstrMessageEvent from astrbot.api.star import Context, Star, register"

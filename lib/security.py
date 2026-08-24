@@ -9,6 +9,7 @@ Copyright (c) 2023 xxyz30, MIT License
 - 持久化缓存，支持强制刷新
 - 更好的错误降级策略
 """
+import asyncio
 import base64
 import gzip
 import hashlib
@@ -312,6 +313,22 @@ def _build_shumei_payload() -> dict:
 
 # ==================== 异步 dId 获取 ====================
 
+async def _read_json(resp: aiohttp.ClientResponse) -> dict:
+    """读取响应 JSON
+
+    数美 API 返回 Content-Type: text/plain（body 实为 JSON），
+    aiohttp 的 resp.json() 会因 mimetype 校验拒绝，故手动 text() + json.loads。
+    """
+    text = await resp.text()
+    if not text.strip():
+        return {}
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning(f"数美API响应非 JSON 文本: {text[:200]}")
+        return {}
+
+
 async def fetch_did(session: Optional[aiohttp.ClientSession] = None) -> str:
     """异步获取设备指纹 dId
 
@@ -346,13 +363,17 @@ async def fetch_did(session: Optional[aiohttp.ClientSession] = None) -> str:
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
-                    data = await resp.json()
+                    data = await _read_json(resp)
                     if data.get('code') == 1100:
                         did = 'B' + data['detail']['deviceId']
                         _save_did_cache(did)
                         logger.info(f"dId 获取成功: {did[:20]}...")
                         return did
-                    logger.warning(f"数美API返回异常: code={data.get('code')}")
+                    logger.warning(
+                        f"数美API返回异常: code={data.get('code')} "
+                        f"msg={data.get('message', data.get('msg', ''))} "
+                        f"(attempt {attempt + 1}/2)"
+                    )
 
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f"数美API请求失败 (attempt {attempt + 1}/2): {e}")

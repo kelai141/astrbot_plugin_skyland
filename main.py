@@ -1,273 +1,444 @@
 """
-森空岛自动签到 AstrBot 插件 — v3.0（DDD 架构）
+森空岛自动签到 AstrBot 插件 — v2.0.0
+纯聊天交互，无需 WebUI 配置
 
-分层依赖：Interface → Application → Domain ← Infrastructure
+重构要点:
+- 模块化架构：引擎 / API / 存储 / 通知 / 处理器 完全解耦
+- 统一连接池管理，签名算法对齐原始 skyland-auto-sign
+- 支持手机验证码登录、Token 绑定、多游戏（明日方舟/终末地）
+- 每用户独立签到时间、推送开关
+- 管理员批量管理
 """
-import asyncio, random
-from datetime import datetime, timedelta, timezone
+import asyncio
+import random
 from pathlib import Path
 from typing import Optional
 
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 
-_DATA_BASE_PLUGIN = "astrbot_plugin_skyland"
+from .lib.storage import FileStore, migrate_from_old
+from .lib.skyland_api import SkylandApiClient
+from .lib.skyland_engine import (
+    SkylandSignEngine,
+    EngineConfig,
+    UserSignState,
+    UserCredential,
+    SignResult,
+)
+from .lib.notification import PushPolicy
+from .lib.security import set_cache_dir, fetch_did
+from .lib.timeutil import beijing_now, beijing_today
+
+# ==================== 路径配置 ====================
+
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-    _DATA_BASE = Path(get_astrbot_data_path()) / "plugin_data" / _DATA_BASE_PLUGIN
-except Exception:
-    _DATA_BASE = Path("data") / "plugin_data" / _DATA_BASE_PLUGIN
+    _DATA_BASE = Path(get_astrbot_data_path()) / "plugin_data" / "astrbot_plugin_skyland"
+except (ImportError, Exception):
+    _DATA_BASE = Path("data") / "plugin_data" / "astrbot_plugin_skyland"
+
 _DATA_BASE.mkdir(parents=True, exist_ok=True)
 
 
-@register(_DATA_BASE_PLUGIN, "森空岛签到",
-          "森空岛自动签到，多用户管理、手机号登录、定时推送", "v3.0.0")
+# ==================== 插件入口 ====================
+
+@register(
+    "astrbot_plugin_skyland",
+    "森空岛签到",
+    "森空岛（明日方舟/终末地）自动签到，支持多用户管理、手机号登录、定时推送，纯聊天交互",
+    "v2.0.0",
+)
 class SklandSignPlugin(Star):
+    """森空岛自动签到插件
+
+    架构：
+    - self.engine: 签到引擎（纯业务逻辑）
+    - self.store: 数据存储（文件持久化）
+    - 命令处理器: handlers/ 模块
+    """
 
     def __init__(self, context: Context, config: dict = None):
         super().__init__(context, config)
         self.config = config or {}
-        self._sign_task: Optional[asyncio.Task] = None
-        self._task_started = False
 
-    async def initialize(self):
-        # === 使用新版 Domain/Infrastructure 架构 ===
-        try:
-            from .domain.enums import ResultType
-            from .domain.models import Account, Credential
-            from .infrastructure.persistence.file_repository import FileAccountRepository
-            from .infrastructure.skyland.api_client_impl import SkylandApiClient
-            from .infrastructure.compat import AstrBotPathAdapter
-            from .infrastructure.notification import NotificationTemplates, PushPolicy
-            from .infrastructure.notification_port import AstrBotNotificationPort
-            from .infrastructure.persistence.credential_cache import MemoryCredentialCache
-            from .infrastructure.skyland.security import set_cache_dir, fetch_did
-            from .interface.handlers.bind import handle_bind, handle_login, handle_unbind
-            from .interface.handlers.sign import handle_sign, handle_push_toggle, handle_time_config, handle_status, handle_did
-            from .interface.handlers.admin import handle_list_users, handle_remove_user, handle_broadcast
-
-            self._account_repo = FileAccountRepository(str(_DATA_BASE))
-            self._api_client = SkylandApiClient()
-            self._cred_cache = MemoryCredentialCache()
-            self._notif_port = AstrBotNotificationPort(self.context)
-
-            try:
-                from .application.sign_service import SignService
-                from .application.account_service import AccountService as AcctSvc
-                from .application.schedule_service import ScheduleService
-                self._sign_svc = SignService(api=self._api_client, account_repo=self._account_repo,
-                    schedule_repo=self._account_repo, cred_cache=self._cred_cache)
-                self._acct_svc = AcctSvc(api=self._api_client, account_repo=self._account_repo,
-                    schedule_repo=self._account_repo, notification=self._notif_port)
-                self._sched_svc = ScheduleService()
-                logger.info("[v3] Application 层已加载")
-            except Exception as e:
-                logger.warning(f"[v3] Application 层未就绪 ({e})，使用兼容模式")
-                self._sign_svc = None
-                self._acct_svc = None
-
-            set_cache_dir(str(_DATA_BASE))
-            try:
-                await fetch_did()
-            except Exception:
-                pass
-            self._start_v3_loop()
-            logger.info("✅ 森空岛签到 v3.0 初始化完成")
-        except Exception as e:
-            logger.warning(f"[v3] DDD 架构导入失败 ({e})，回退 v2 引擎")
-            await self._legacy_init()
-
-    async def _legacy_init(self):
-        from .lib.skyland_engine import SkylandSignEngine, EngineConfig
-        from .lib.storage import FileStore, migrate_from_old
-        from .lib.security import set_cache_dir, fetch_did
-        from .lib.timeutil import beijing_now
+        # 数据存储
         self.store = FileStore(str(_DATA_BASE))
-        migrate_from_old(self.store)
-        self.store.load()
-        self.engine = SkylandSignEngine(EngineConfig(
+
+        # 签到引擎
+        engine_cfg = EngineConfig(
             default_sign_time=self.config.get("sign_time", "09:05"),
             sign_interval_seconds=self.config.get("sign_interval_seconds", 2),
             sign_retry_count=self.config.get("sign_retry_count", 2),
             cred_refresh_window_hours=self.config.get("cred_refresh_window_hours", 24),
             push_enabled_default=self.config.get("push_enabled_default", True),
-        ))
+        )
+        self.engine = SkylandSignEngine(engine_cfg)
+
+        # 后台任务
+        self._sign_task: Optional[asyncio.Task] = None
+        self._task_started = False
+
+    # ==================== 生命周期 ====================
+
+    async def initialize(self):
+        """插件初始化：加载数据 → 迁移 → 启动引擎 → 预加载 dId → 启动定时签到"""
+        # 数据迁移
+        migrate_from_old(self.store)
+
+        # 加载数据
+        self.store.load()
+
+        # 初始化引擎
         await self.engine.initialize()
+
+        # 设置 dId 缓存
         set_cache_dir(str(_DATA_BASE))
+
+        # 预加载 dId（避免首次调用阻塞）
         try:
             await fetch_did()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"预加载 dId 失败（不影响签到）: {e}")
+
+        # 启动定时签到
         if self.store.get_users():
             self._start_auto_sign_loop()
-        logger.info(f"✅ 森空岛签到 v3.0（兼容模式）初始化完成，{len(self.store.get_users())} 用户")
 
-    def _start_v3_loop(self):
-        if self._task_started:
-            return
-        self._task_started = True
-        self._sign_task = asyncio.create_task(self._v3_loop())
-        logger.info("v3 自动签到循环已启动")
-
-    async def _v3_loop(self):
-        try:
-            await asyncio.sleep(5)
-            last_slot = None
-            while True:
-                try:
-                    now = self._now_beijing()
-                    slot = now.hour * 60 + now.minute
-                    if last_slot is None:
-                        slots = [slot]
-                    else:
-                        slots = list(range(last_slot + 1, slot + 1)) if last_slot <= slot else [slot]
-                    for s in slots:
-                        h, m = divmod(s, 60)
-                        for acct in (await self._account_repo.find_all()):
-                            if acct.token_expired or acct.sign_time != f"{h:02d}:{m:02d}":
-                                continue
-                            result = await self._sign_svc.execute_sign(acct)
-                            await self._account_repo.save(acct)
-                    last_slot = slot
-                    await asyncio.sleep(60 - self._now_beijing().second + 0.5)
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.error(f"v3 循环异常: {e}", exc_info=True)
-                    await asyncio.sleep(3)
-        except asyncio.CancelledError:
-            logger.info("v3 循环已取消")
-
-    def _now_beijing(self):
-        return datetime.now(timezone.utc) + timedelta(hours=8)
-
-    def _get_sender_id(self, event):
-        gid = event.get_group_id()
-        return f"{gid}:{event.get_sender_id()}" if gid else event.get_sender_id()
-
-    def _is_admin(self, event):
-        sid = event.get_sender_id()
-        if sid in self.config.get("admin_users", []):
-            return True
-        try:
-            return self.context.is_admin(sid)
-        except Exception:
-            return False
+        logger.info(f"森空岛签到插件 v2.0.0 已初始化，{len(self.store.get_users())} 个用户")
 
     async def terminate(self):
-        if hasattr(self, 'store'):
-            self.store.flush()
+        """插件卸载：刷新数据 → 取消后台任务 → 关闭引擎"""
+        # 强制保存内存数据到磁盘
+        self.store.flush()
+        logger.info("数据已刷新到磁盘")
+
         if self._sign_task and not self._sign_task.done():
             self._sign_task.cancel()
             try:
                 await self._sign_task
             except asyncio.CancelledError:
                 pass
-        if hasattr(self, 'engine'):
-            await self.engine.shutdown()
-        logger.info("插件已关闭")
+            logger.info("自动签到循环已取消")
+        await self.engine.shutdown()
+        logger.info("森空岛签到插件已关闭")
 
-    # ======= 指令系统 =======
+    # ==================== 内部方法 ====================
+
+    def _get_sender_id(self, event: AstrMessageEvent) -> str:
+        """获取用户唯一标识（私聊用 sender_id，群聊用 unified_msg_origin）"""
+        gid = event.get_group_id()
+        if gid:
+            return f"{gid}:{event.get_sender_id()}"
+        return event.get_sender_id()
+
+    def _is_admin(self, event: AstrMessageEvent) -> bool:
+        """判断用户是否为管理员"""
+        sender_id = event.get_sender_id()
+        admin_ids = self.config.get("admin_users", [])
+        if sender_id in admin_ids:
+            return True
+        try:
+            return self.context.is_admin(sender_id)
+        except Exception:
+            return False
+
+    def _load_user_state(self, sender_id: str) -> Optional[UserSignState]:
+        """从存储加载用户签到状态"""
+        data = self.store.get_user(sender_id)
+        if data is None:
+            return None
+        return UserSignState(
+            sender_id=sender_id,
+            credential=UserCredential(
+                token=data.get("token", ""),
+                cred=data.get("cred", ""),
+                sign_token=data.get("sign_token", data.get("token", "")),
+                refreshed_at=data.get("refreshed_at", ""),
+            ),
+            game_info=data.get("game_info", ""),
+            last_sign_date=data.get("last_sign_date", ""),
+            last_sign_result=data.get("last_sign_result", ""),
+            push_enabled=data.get("push_enabled", True),
+            sign_time=data.get("sign_time", "09:05"),
+            bound_at=data.get("bound_at", ""),
+            notify_target=data.get("notify_target", sender_id),
+            token_expired=data.get("token_expired", False),
+        )
+
+    def _save_user_state(self, sender_id: str, state: UserSignState):
+        """将用户签到状态保存到存储"""
+        self.store.set_user(sender_id, {
+            "token": state.credential.token,
+            "cred": state.credential.cred,
+            "sign_token": state.credential.sign_token,
+            "refreshed_at": state.credential.refreshed_at,
+            "game_info": state.game_info,
+            "last_sign_date": state.last_sign_date,
+            "last_sign_result": state.last_sign_result,
+            "push_enabled": state.push_enabled,
+            "sign_time": state.sign_time,
+            "bound_at": state.bound_at,
+            "notify_target": state.notify_target,
+            "token_expired": state.token_expired,
+        })
+        logger.info(f"[数据] 已保存用户 {sender_id[:16]} | sign_time={state.sign_time} | push={state.push_enabled}" + (" | ⚠️已过期" if state.token_expired else ""))
+
+    async def _notify_user(self, user_info: dict, message: str):
+        """向用户发送通知消息"""
+        target = user_info.get("notify_target", "")
+        if not target:
+            return
+        chain = MessageChain().message(message)
+        try:
+            await self.context.send_message(target, chain)
+        except ValueError as e:
+            if "不合法的 session" in str(e) or "not enough values" in str(e):
+                logger.warning(
+                    f"[通知] notify_target 格式过旧 ({target[:32]})，"
+                    f"跳过通知。请用户发送 /skland bind 重新绑定以更新通知目标。"
+                )
+            else:
+                raise
+
+    # ==================== 定时签到 ====================
+
+    def _start_auto_sign_loop(self):
+        """启动定时签到循环"""
+        if self._task_started:
+            return
+        self._task_started = True
+        self._sign_task = asyncio.create_task(self._auto_sign_loop())
+        logger.info("自动签到循环已启动")
+
+    async def _auto_sign_loop(self):
+        """每分钟检查并执行签到，带防漏分钟机制
+
+        如果批量签到耗时 > 60s 导致跳过若干分钟，会回溯处理被跳过的分钟，
+        确保不会因为网络延迟或大批量处理而漏掉用户的签到时间。
+        """
+        try:
+            await asyncio.sleep(5)  # 初始化缓冲
+            last_checked_slot: Optional[int] = None  # 上次检查的"一天中的分钟索引"
+
+            while True:
+                try:
+                    now = beijing_now()
+                    current_minute_slot = now.hour * 60 + now.minute  # 0-1439
+                    today = beijing_today().isoformat()
+
+                    # 每 60 分钟打印一次心跳日志（方便排查循环是否存活）
+                    if current_minute_slot % 60 == 0:
+                        user_count = len(self.store.get_users())
+                        logger.info(
+                            f"[心跳] {now.hour:02d}:{now.minute:02d} "
+                            f"循环正常 | 已绑定用户: {user_count}"
+                        )
+
+                    # 确定需要检查的分钟范围（含当前分钟，防漏）
+                    if last_checked_slot is None:
+                        slots_to_check = [current_minute_slot]
+                    else:
+                        # 从上次检查的下一分钟到当前分钟（包含）
+                        start = last_checked_slot + 1
+                        if start > current_minute_slot:
+                            # 跨越了 0 点（极少情况），重置
+                            slots_to_check = [current_minute_slot]
+                        else:
+                            slots_to_check = list(range(start, current_minute_slot + 1))
+
+                    for slot in slots_to_check:
+                        ch, cm = divmod(slot, 60)
+                        due_users = []
+                        for sid, info in self.store.get_users().items():
+                            user_time = info.get("sign_time", "09:05")
+                            try:
+                                uh, um = map(int, user_time.split(":"))
+                            except (ValueError, AttributeError):
+                                uh, um = 9, 5
+                            if uh == ch and um == cm:
+                                state = self._load_user_state(sid)
+                                if state and not state.token_expired:
+                                    due_users.append((sid, state))
+                                elif state and state.token_expired:
+                                    logger.debug(f"[{ch:02d}:{cm:02d}] 跳过过期用户 {sid[:16]}")
+
+                        if due_users:
+                            logger.info(
+                                f"[{ch:02d}:{cm:02d}] 触发签到，{len(due_users)} 个用户: "
+                                + ", ".join(sid[:16] for sid, _ in due_users)
+                            )
+                            await self._auto_sign_batch(due_users)
+
+                    last_checked_slot = current_minute_slot
+
+                    # 等待到下一分钟
+                    sleep_sec = 60 - beijing_now().second + 0.5
+                    await asyncio.sleep(sleep_sec)
+
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # 循环内部异常不得导致整个后台任务退出
+                    logger.error(f"自动签到循环内部异常（3s 后恢复）: {e}", exc_info=True)
+                    await asyncio.sleep(3)
+
+        except asyncio.CancelledError:
+            logger.info("自动签到循环被取消")
+            raise
+        except Exception as e:
+            # 极端情况：最后一次保底
+            logger.critical(f"自动签到循环致命异常，已退出: {e}", exc_info=True)
+
+    async def _auto_sign_batch(self, users: list[tuple[str, UserSignState]]):
+        """批量自动签到"""
+        for sender_id, state in users:
+            try:
+                result = await self.engine.sign(state)
+                self._save_user_state(sender_id, state)
+
+                # 推送决策
+                decision = PushPolicy.decide(state, result, is_manual=False)
+                if decision.should_push and decision.message:
+                    info = self.store.get_user(sender_id) or {}
+                    await self._notify_user(info, decision.message)
+                    logger.info(f"[推送] {sender_id}: {decision.reason}")
+
+            except Exception as e:
+                logger.error(f"[自动签到] {sender_id} 失败: {e}", exc_info=True)
+
+            # 随机间隔防风控
+            interval = self.config.get("sign_interval_seconds", 2) * random.uniform(0.5, 1.5)
+            await asyncio.sleep(interval)
+
+    # ==================== 指令系统 ====================
 
     @filter.command_group("skland")
     def skland():
+        """/skland 指令组"""
         pass
+
+    # ---- 帮助 ----
 
     @skland.command("help")
     async def help(self, event: AstrMessageEvent):
+        """显示帮助信息"""
         yield event.plain_result(
-            "🌠 森空岛自动签到 v3.0\n\n"
+            "🌠 森空岛自动签到 v2.0\n\n"
             "📋 可用指令：\n"
-            "  /skland bind <token>    绑定鹰角通行证 token\n"
-            "  /skland login           手机号+验证码登录\n"
+            "  /skland bind <token>    绑定鹰角通行证 token（最快）\n"
+            "  /skland login           通过手机号+验证码登录绑定\n"
             "  /skland sign            立即手动签到\n"
             "  /skland status          查看签到状态\n"
-            "  /skland push on|off     开关自动推送\n"
-            "  /skland time [set HH:MM] 设置签到时间\n"
-            "  /skland did             查看设备指纹\n"
+            "  /skland push on|off     开关自动推送通知\n"
+            "  /skland time [set HH:MM] 查看/设置签到时间\n"
+            "  /skland did             查看设备指纹状态\n"
             "  /skland unbind          解绑账号\n\n"
             "🔧 管理员指令：\n"
-            "  /skland list            查看所有用户\n"
-            "  /skland remove <id>     移除用户\n"
-            "  /skland broadcast <msg> 群发消息\n\n"
-            "💡 推荐 /skland login 手机号登录（无需浏览器）"
+            "  /skland list            查看所有绑定用户\n"
+            "  /skland remove <id>     移除指定用户的绑定\n"
+            "  /skland broadcast <msg> 向所有用户群发\n\n"
+            "💡 推荐使用 /skland login 手机号登录（无需浏览器）\n"
+            "💡 也可用 /skland bind 绑定 token\n\n"
+            "📌 绑定后自动签到，结果私聊推送。"
         )
+
+    # ---- Token 绑定 ----
 
     @skland.command("bind")
     async def bind(self, event: AstrMessageEvent, token: str = None):
-        if hasattr(self, '_acct_svc') and self._acct_svc:
-            from .interface.handlers.bind import handle_bind as h
-        else:
-            from .handlers.bind import handle_bind as h
-        async for msg in h(self, event, token):
+        """绑定鹰角通行证 token"""
+        from .handlers.bind import handle_bind
+        async for msg in handle_bind(self, event, token):
             yield msg
+
+    # ---- 手机验证码登录 ----
 
     @skland.command("login")
     async def login(self, event: AstrMessageEvent):
-        if hasattr(self, '_acct_svc') and self._acct_svc:
-            from .interface.handlers.bind import handle_login as h
-        else:
-            from .handlers.bind import handle_login as h
-        async for msg in h(self, event):
+        """通过手机号+验证码登录绑定"""
+        from .handlers.bind import handle_login
+        async for msg in handle_login(self, event):
             yield msg
+
+    # ---- 手动签到 ----
 
     @skland.command("sign")
     async def sign(self, event: AstrMessageEvent):
-        if hasattr(self, '_sign_svc') and self._sign_svc:
-            from .interface.handlers.sign import handle_sign as h
-        else:
-            from .handlers.sign import handle_sign as h
-        async for msg in h(self, event):
+        """立即手动签到"""
+        from .handlers.sign import handle_sign
+        async for msg in handle_sign(self, event):
             yield msg
+
+    # ---- 推送开关 ----
 
     @skland.command("push")
     async def push_toggle(self, event: AstrMessageEvent, action: str = None):
-        from .handlers.sign import handle_push_toggle as h
-        async for msg in h(self, event, action):
+        """开关自动推送通知"""
+        from .handlers.sign import handle_push_toggle
+        async for msg in handle_push_toggle(self, event, action):
             yield msg
+
+    # ---- 签到时间 ----
 
     @skland.command("time")
     async def time_config(self, event: AstrMessageEvent, action: str = None, arg: str = None):
-        from .handlers.sign import handle_time_config as h
-        async for msg in h(self, event, action, arg):
+        """查看或设置签到时间"""
+        from .handlers.sign import handle_time_config
+        async for msg in handle_time_config(self, event, action, arg):
             yield msg
+
+    # ---- 签到状态 ----
 
     @skland.command("status")
     async def status(self, event: AstrMessageEvent):
-        from .handlers.sign import handle_status as h
-        async for msg in h(self, event):
+        """查看签到状态"""
+        from .handlers.sign import handle_status
+        async for msg in handle_status(self, event):
             yield msg
+
+    # ---- 设备指纹 ----
 
     @skland.command("did")
     async def did(self, event: AstrMessageEvent):
-        from .handlers.sign import handle_did as h
-        async for msg in h(self, event):
+        """查看设备指纹状态"""
+        from .handlers.sign import handle_did
+        async for msg in handle_did(self, event):
             yield msg
+
+    # ---- 解绑 ----
 
     @skland.command("unbind")
     async def unbind(self, event: AstrMessageEvent):
-        if hasattr(self, '_acct_svc') and self._acct_svc:
-            from .interface.handlers.bind import handle_unbind as h
-        else:
-            from .handlers.bind import handle_unbind as h
-        async for msg in h(self, event):
+        """解绑账号"""
+        from .handlers.bind import handle_unbind
+        async for msg in handle_unbind(self, event):
             yield msg
+
+    # ---- 管理员: 查看用户 ----
 
     @skland.command("list")
     async def list_users(self, event: AstrMessageEvent):
-        from .handlers.admin import handle_list_users as h
-        async for msg in h(self, event):
+        """管理员查看所有已绑定用户"""
+        from .handlers.admin import handle_list_users
+        async for msg in handle_list_users(self, event):
             yield msg
+
+    # ---- 管理员: 移除用户 ----
 
     @skland.command("remove")
     async def remove_user(self, event: AstrMessageEvent, user_id: str = None):
-        from .handlers.admin import handle_remove_user as h
-        async for msg in h(self, event, user_id):
+        """管理员移除指定用户的绑定"""
+        from .handlers.admin import handle_remove_user
+        async for msg in handle_remove_user(self, event, user_id):
             yield msg
+
+    # ---- 管理员: 群发 ----
 
     @skland.command("broadcast")
     async def broadcast(self, event: AstrMessageEvent):
-        from .handlers.admin import handle_broadcast as h
-        async for msg in h(self, event):
+        """管理员向所有用户群发消息"""
+        from .handlers.admin import handle_broadcast
+        async for msg in handle_broadcast(self, event):
             yield msg

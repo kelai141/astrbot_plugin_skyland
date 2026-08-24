@@ -127,29 +127,27 @@ async def handle_status(plugin, event: AstrMessageEvent):
 
 async def handle_did(plugin, event: AstrMessageEvent):
     """处理 /skland did"""
-    from ..lib.security import _load_cached_did, _DID_CACHE_FILE
+    from ..lib.security import get_did_meta, _DID_CACHE_FILE
     import os
 
-    cached = _load_cached_did()
+    did, source = get_did_meta()
     lines = ["📟 设备指纹 (dId) 状态"]
 
-    if cached:
-        lines.append(f"✅ 已缓存: {cached[:16]}...{cached[-8:]}")
+    if source == "shumei" and did:
+        lines.append(f"✅ 有效: {did[:16]}...{did[-8:]}")
+        lines.append(f"📁 来源: 数美 API")
         lines.append(f"📁 缓存文件: {_DID_CACHE_FILE or '未设置'}")
-
-        if len(cached) < 40:
-            lines.append("⚠️ 当前使用的是 fallback dId")
-            lines.append("   森空岛 API 可能拒绝请求")
-            lines.append("   尝试在可访问 fp-it.portal101.cn 的网络下重载插件")
-        else:
-            lines.append("✅ dId 来自数美 API")
 
         if _DID_CACHE_FILE and os.path.exists(_DID_CACHE_FILE):
             mtime = datetime.fromtimestamp(os.path.getmtime(_DID_CACHE_FILE), tz=BEIJING_TZ)
             lines.append(f"🕐 缓存时间: {mtime.strftime('%Y-%m-%d %H:%M:%S')}")
+    elif source == "legacy" and did:
+        lines.append("⚠️ 发现旧版 dId 缓存（可能为 fallback 假 dId）")
+        lines.append("   插件初始化时会自动清理并重新获取，重载插件即可")
     else:
-        lines.append("❌ 未生成 dId")
-        lines.append("   请重载插件以重新生成")
+        lines.append("❌ 未生成有效 dId")
+        lines.append("   插件初始化时会尝试从数美 API 获取")
+        lines.append("   若持续失败，请检查服务器能否访问 fp-it.portal101.cn")
 
     lines.append("")
     lines.append("💡 dId 是设备指纹，用于森空岛 API 鉴权")

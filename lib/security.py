@@ -23,7 +23,11 @@ import aiohttp
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.algorithms import AES
-from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+try:
+    # cryptography >= 43: TripleDES 移至 decrepit
+    from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+except ImportError:
+    from cryptography.hazmat.primitives.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.ciphers.base import Cipher
 from cryptography.hazmat.primitives.ciphers.modes import CBC, ECB
 
@@ -33,6 +37,8 @@ try:
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
+
+from .timeutil import beijing_now
 
 # ==================== 常量 ====================
 
@@ -50,6 +56,7 @@ SM_CONFIG = {
     "apiHost": "fp-it.portal101.cn"
 }
 
+# DES 加密规则（逐项对齐原版 FancyCabbage/skyland-auto-sign 的 SecuritySm.py）
 DES_RULE = {
     "appId":       {"cipher": "DES", "is_encrypt": 1, "key": "uy7mzc4h", "obfuscated_name": "xx"},
     "box":         {"is_encrypt": 0, "obfuscated_name": "jf"},
@@ -58,19 +65,24 @@ DES_RULE = {
     "organization":{"cipher": "DES", "is_encrypt": 1, "key": "78moqjfc", "obfuscated_name": "dp"},
     "os":          {"cipher": "DES", "is_encrypt": 1, "key": "je6vk6t4", "obfuscated_name": "pj"},
     "platform":    {"cipher": "DES", "is_encrypt": 1, "key": "pakxhcd2", "obfuscated_name": "gm"},
-    "plugins":     {"cipher": "DES", "is_encrypt": 1, "key": "ioy1geet", "obfuscated_name": "sc"},
-    "protocol":    {"cipher": "DES", "is_encrypt": 1, "key": "yaod0lwh", "obfuscated_name": "xt"},
-    "referer":     {"cipher": "DES", "is_encrypt": 1, "key": "5cf8lp6y", "obfuscated_name": "mi"},
-    "res":         {"cipher": "DES", "is_encrypt": 1, "key": "byu3333s", "obfuscated_name": "pl"},
-    "status":      {"cipher": "DES", "is_encrypt": 1, "key": "6wyrmze2", "obfuscated_name": "xc"},
-    "svm":         {"cipher": "DES", "is_encrypt": 1, "key": "auty7gm1", "obfuscated_name": "gg"},
-    "timezone":    {"cipher": "DES", "is_encrypt": 1, "key": "c1sru5pd", "obfuscated_name": "lc"},
+    "plugins":     {"cipher": "DES", "is_encrypt": 1, "key": "v51m3pzl", "obfuscated_name": "kq"},
+    "pmf":         {"cipher": "DES", "is_encrypt": 1, "key": "2mdeslu3", "obfuscated_name": "vw"},
+    "protocol":    {"is_encrypt": 0, "obfuscated_name": "protocol"},
+    "referer":     {"cipher": "DES", "is_encrypt": 1, "key": "y7bmrjlc", "obfuscated_name": "ab"},
+    "res":         {"cipher": "DES", "is_encrypt": 1, "key": "whxqm2a7", "obfuscated_name": "hf"},
+    "rtype":       {"cipher": "DES", "is_encrypt": 1, "key": "x8o2h2bl", "obfuscated_name": "lo"},
+    "sdkver":      {"cipher": "DES", "is_encrypt": 1, "key": "9q3dcxp2", "obfuscated_name": "sc"},
+    "status":      {"cipher": "DES", "is_encrypt": 1, "key": "2jbrxxw4", "obfuscated_name": "an"},
+    "subVersion":  {"cipher": "DES", "is_encrypt": 1, "key": "eo3i2puh", "obfuscated_name": "ns"},
+    "svm":         {"cipher": "DES", "is_encrypt": 1, "key": "fzj3kaeh", "obfuscated_name": "qr"},
+    "time":        {"cipher": "DES", "is_encrypt": 1, "key": "q2t3odsk", "obfuscated_name": "nb"},
+    "timezone":    {"cipher": "DES", "is_encrypt": 1, "key": "1uv05lj5", "obfuscated_name": "as"},
+    "tn":          {"cipher": "DES", "is_encrypt": 1, "key": "x9nzj1bp", "obfuscated_name": "py"},
     "trees":       {"cipher": "DES", "is_encrypt": 1, "key": "acfs0xo4", "obfuscated_name": "pi"},
     "ua":          {"cipher": "DES", "is_encrypt": 1, "key": "k92crp1t", "obfuscated_name": "bj"},
     "url":         {"cipher": "DES", "is_encrypt": 1, "key": "y95hjkoo", "obfuscated_name": "cf"},
     "version":     {"is_encrypt": 0, "obfuscated_name": "version"},
     "vpw":         {"cipher": "DES", "is_encrypt": 1, "key": "r9924ab5", "obfuscated_name": "ca"},
-    "pmf":         {"cipher": "DES", "is_encrypt": 1, "key": "x9nzj1bp", "obfuscated_name": "py"},
 }
 
 BROWSER_ENV = {
@@ -101,44 +113,91 @@ _DID_CACHE_FILE: Optional[str] = None
 
 
 def set_cache_dir(cache_dir: str):
-    """设置 dId 持久化缓存目录（在插件初始化时调用）"""
+    """设置 dId 持久化缓存目录（在插件初始化时调用）
+
+    缓存文件名带 .json 后缀（v2 格式），旧版纯文本 did.cache 会被自动作废，
+    避免历史 fallback 假 dId 被永久复用导致「设备信息无效」。
+    """
     global _DID_CACHE_DIR, _DID_CACHE_FILE
     _DID_CACHE_DIR = cache_dir
     try:
         os.makedirs(cache_dir, exist_ok=True)
-        _DID_CACHE_FILE = os.path.join(cache_dir, "did.cache")
+        _DID_CACHE_FILE = os.path.join(cache_dir, "did.cache.json")
+        # 清理旧版假 dId 缓存（纯文本 did.cache）
+        legacy = os.path.join(cache_dir, "did.cache")
+        if os.path.exists(legacy):
+            try:
+                os.remove(legacy)
+                logger.info("已清理旧版 did.cache（可能存在 fallback 假 dId）")
+            except OSError as e:
+                logger.warning(f"清理旧版 did.cache 失败: {e}")
     except Exception as e:
         logger.warning(f"创建 dId 缓存目录失败: {e}")
 
 
 def _load_cached_did() -> str:
-    """从磁盘加载缓存的 dId"""
+    """从磁盘加载缓存的 dId（仅接受数美 API 来源，杜绝假 dId 复用）"""
     if _DID_CACHE_FILE and os.path.exists(_DID_CACHE_FILE):
         try:
-            with open(_DID_CACHE_FILE, "r") as f:
-                did = f.read().strip()
-                if did and did.startswith("B"):
-                    return did
-        except Exception as e:
+            with open(_DID_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            did = data.get("did", "")
+            if did and did.startswith("B") and data.get("source") == "shumei":
+                return did
+            # 旧格式/假 dId → 作废并删除
+            logger.warning("检测到无效的 dId 缓存，已作废并触发重新获取")
+            os.remove(_DID_CACHE_FILE)
+        except (ValueError, OSError) as e:
             logger.warning(f"读取 dId 缓存失败: {e}")
     return ""
 
 
+def get_did_meta() -> tuple[str, str]:
+    """返回 (dId, 来源)，供 /skland did 展示用
+
+    来源: shumei（数美 API，有效）| fallback（降级假指纹，无效）
+    """
+    if _DID_CACHE_FILE and os.path.exists(_DID_CACHE_FILE):
+        try:
+            with open(_DID_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            did = data.get("did", "")
+            if did and did.startswith("B") and data.get("source") == "shumei":
+                return did, "shumei"
+        except (ValueError, OSError):
+            pass
+    if _DID_CACHE_DIR:
+        legacy = os.path.join(_DID_CACHE_DIR, "did.cache")
+        if os.path.exists(legacy):
+            try:
+                with open(legacy, "r", encoding="utf-8") as f:
+                    did = f.read().strip()
+                if did.startswith("B"):
+                    return did, "legacy"
+            except OSError:
+                pass
+    return "", ""
+
+
 def _save_did_cache(did: str):
-    """将 dId 保存到磁盘缓存"""
+    """将数美 API 返回的真 dId 保存到磁盘（仅 shumei 来源会被持久化）"""
     if _DID_CACHE_FILE and did:
         try:
-            with open(_DID_CACHE_FILE, "w") as f:
-                f.write(did)
+            with open(_DID_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "did": did,
+                    "source": "shumei",
+                    "cached_at": beijing_now().isoformat(),
+                }, f, ensure_ascii=False)
             logger.info(f"dId 已缓存到磁盘: {did[:20]}...")
         except Exception as e:
             logger.warning(f"保存 dId 缓存失败: {e}")
 
 
 def _generate_fallback_did() -> str:
-    """生成 fallback dId（数美 API 不可用时使用）"""
+    """生成 fallback dId（数美 API 不可用时使用，不持久化）"""
     fallback = 'B' + hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()
-    logger.warning("数美API不可用，使用 fallback dId")
+    logger.warning("数美API不可用，使用临时 fallback dId（不落盘，请求可能被拒）")
     return fallback
 
 
@@ -306,9 +365,8 @@ async def fetch_did(session: Optional[aiohttp.ClientSession] = None) -> str:
         if close_session:
             await session.close()
 
-    # 3. Fallback
+    # 3. Fallback（不持久化：假 dId 落盘会被永久复用，宁可每次临时生成）
     fallback = _generate_fallback_did()
-    _save_did_cache(fallback)
     logger.warning("使用 fallback dId，森空岛API可能拒绝请求")
     return fallback
 
@@ -351,5 +409,4 @@ def get_d_id() -> str:
         logger.warning(f"同步获取 dId 失败: {e}")
 
     fallback = _generate_fallback_did()
-    _save_did_cache(fallback)
     return fallback

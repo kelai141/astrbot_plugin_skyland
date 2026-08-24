@@ -50,17 +50,15 @@ SIGN_URL_MAPPING = {
     'endfield': f'{API_BASE}/web/v1/game/endfield/attendance',
 }
 
-# 基础请求头
+# 基础请求头（对齐原版 skyland-auto-sign：原生 App OkHttp UA）
 _BASE_HEADERS = {
     'cred': '',
     'User-Agent': (
-        'Mozilla/5.0 (Linux; Android 12; SM-A5560 Build/V417IR; wv) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/101.0.4951.61 '
-        'Safari/537.36; SKLand/1.52.1'
+        'Skland/1.0.1 (com.hypergryph.skland; build:100001014; '
+        'Android 31; ) Okhttp/4.11.0'
     ),
     'Accept-Encoding': 'gzip',
     'Connection': 'close',
-    'X-Requested-With': 'com.hypergryph.skland',
 }
 
 # 签名请求头模板（对齐原始 skyland-auto-sign）
@@ -81,9 +79,11 @@ def _get_sign_header_template() -> dict:
 
 
 def _get_login_headers() -> dict:
-    """获取登录用请求头（含 dId）"""
+    """获取登录用请求头（对齐原版 header_login：仅 UA + 压缩 + 连接 + dId）"""
     return {
-        **_BASE_HEADERS,
+        'User-Agent': _BASE_HEADERS['User-Agent'],
+        'Accept-Encoding': 'gzip',
+        'Connection': 'close',
         'dId': get_d_id(),
     }
 
